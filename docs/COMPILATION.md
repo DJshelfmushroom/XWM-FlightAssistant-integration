@@ -24,18 +24,23 @@ This document walks you through every step needed to build
 
 ## 1. Prerequisites
 
-| Tool        | Minimum version | Notes                                           |
+| Tool        | Version         | Notes                                           |
 |-------------|-----------------|-------------------------------------------------|
-| **Java**    | 17              | Must be on `PATH`; JDK (not JRE) required       |
-| **Gradle**  | 8.1.1           | Use the included wrapper (`./gradlew`) — do **not** install a separate Gradle |
+| **Java**    | 17 – 25         | Must be on `PATH`; JDK (not JRE) required. Java 17 LTS or Java 21 LTS are recommended. |
+| **Gradle**  | 8.14.4          | Use the included wrapper (`./gradlew`) — do **not** install a separate Gradle |
 | **Network** | —               | Required on first build to download Forge, mappings, Xaero, and FlightAssistant |
 
 Verify your Java installation:
 
 ```bash
 java -version
-# Expected output contains: openjdk 17  (or higher, within JDK 17 LTS)
+# Expected output contains: openjdk 17  (or higher, up to Java 25)
 ```
+
+> **Java version note:** The Gradle wrapper bundled with this project (8.14.4)
+> supports Java 17 through Java 25. If you are using a newer JDK, update the
+> `distributionUrl` in `gradle/wrapper/gradle-wrapper.properties` to the latest
+> Gradle 8.x release.
 
 > **Apple Silicon / ARM64 users:** Azul Zulu JDK 17 for arm64 is recommended.
 > AdoptOpenJDK / Eclipse Temurin 17 also works.
@@ -204,9 +209,23 @@ retry with:
 The Modrinth Maven could not find the artifact. Use the
 [local jar fallback](#flightassistant--local-jar-fallback) instead.
 
-### `java.lang.UnsupportedClassVersionError` during build
+### `java.lang.UnsupportedClassVersionError` or `Unsupported class file major version` during build
 
-Your JDK is older than 17. Install JDK 17 and ensure `JAVA_HOME` points to it:
+Your JDK version is not supported by the Gradle wrapper bundled with this project.
+
+- `Unsupported class file major version N` in the **Gradle startup phase** means your JDK is
+  **newer** than what this Gradle version understands. Update the wrapper by changing
+  `gradle/wrapper/gradle-wrapper.properties` to point to the latest Gradle 8.x release:
+
+  ```properties
+  distributionUrl=https\://services.gradle.org/distributions/gradle-<VERSION>-bin.zip
+  ```
+
+  Replace `<VERSION>` with the latest release from
+  <https://gradle.org/releases/>.
+
+- `java.lang.UnsupportedClassVersionError` **during compilation** means your JDK is
+  **older** than 17. Install JDK 17 and ensure `JAVA_HOME` points to it:
 
 ```bash
 # macOS / Linux

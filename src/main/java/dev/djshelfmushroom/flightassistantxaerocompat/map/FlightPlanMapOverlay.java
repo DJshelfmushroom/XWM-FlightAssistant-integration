@@ -11,8 +11,6 @@ import net.minecraft.client.renderer.GameRenderer;
 import java.util.ArrayList;
 import java.util.List;
 
-import java.util.List;
-
 /**
  * Renders the active FlightAssistant flight plan as an overlay on Xaero's
  * World Map screen.

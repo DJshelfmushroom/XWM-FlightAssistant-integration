@@ -1,0 +1,45 @@
+modLoader="javafml"
+loaderVersion="[47,)"
+license="MIT"
+
+[[mods]]
+    modId="flightassistant_xaero_compat"
+    version="1.0.0"
+    displayName="FlightAssistant Xaero Compat"
+    description='''Integrates Xaero's World Map with FlightAssistant autopilot.
+Adds waypoint context menu options and a flight plan map overlay.'''
+    authors="djshelfmushroom"
+    displayTest="IGNORE_ALL_VERSION"
+    clientSideOnly=true
+
+# Minecraft dependency
+[[dependencies.flightassistant_xaero_compat]]
+    modId="minecraft"
+    mandatory=true
+    versionRange="[1.20.1,1.21)"
+    ordering="NONE"
+    side="CLIENT"
+
+# Forge dependency
+[[dependencies.flightassistant_xaero_compat]]
+    modId="forge"
+    mandatory=true
+    versionRange="[47.4.10,)"
+    ordering="NONE"
+    side="CLIENT"
+
+# Xaero's World Map — required
+[[dependencies.flightassistant_xaero_compat]]
+    modId="xaeroworldmap"
+    mandatory=true
+    versionRange="[1.39.2,)"
+    ordering="AFTER"
+    side="CLIENT"
+
+# FlightAssistant — required
+[[dependencies.flightassistant_xaero_compat]]
+    modId="flightassistant"
+    mandatory=true
+    versionRange="[3.0.1,)"
+    ordering="AFTER"
+    side="CLIENT"

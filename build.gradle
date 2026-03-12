@@ -1,0 +1,112 @@
+plugins {
+    id 'net.minecraftforge.gradle' version '[6.0,6.2)'
+    id 'org.spongepowered.mixin' version '0.7.+'
+    id 'eclipse'
+}
+
+version = project.mod_version
+group = project.mod_group_id
+
+base {
+    archivesName = project.mod_id
+}
+
+java {
+    toolchain.languageVersion = JavaLanguageVersion.of(17)
+}
+
+minecraft {
+    mappings channel: 'official', version: project.minecraft_version
+
+    copyIdeResources = true
+
+    runs {
+        client {
+            workingDirectory project.file('run')
+            property 'forge.logging.markers', 'REGISTRIES'
+            property 'forge.logging.console.level', 'debug'
+            mods {
+                "${project.mod_id}" {
+                    source sourceSets.main
+                }
+            }
+        }
+    }
+}
+
+sourceSets.main.resources { srcDir 'src/generated/resources' }
+
+repositories {
+    // Xaero's Maven for XaeroWorldMap
+    maven {
+        name = "Xaero's Maven"
+        url = "https://maven.xeadmc.net/"
+    }
+    // Modrinth Maven for FlightAssistant
+    maven {
+        name = "Modrinth Maven"
+        url = "https://api.modrinth.com/maven"
+    }
+    // Local libs folder for any manual jar dependencies
+    flatDir { dirs 'libs' }
+}
+
+dependencies {
+    minecraft "net.minecraftforge:forge:${project.minecraft_version}-${project.forge_version}"
+
+    // Xaero's World Map 1.39.2 (deobfuscated via ForgeGradle)
+    compileOnly fg.deobf("xaero.public.maven:XaeroWorldMap:${project.xaero_worldmap_version}")
+
+    // FlightAssistant 3.0.1 - compile-only reference for API access
+    // Download from https://github.com/Octol1ttle/FlightAssistant/releases/tag/3.0.1
+    // and place the jar in the libs/ directory, OR keep this Modrinth coordinate:
+    compileOnly fg.deobf("maven.modrinth:flightassistant:${project.flightassistant_version}+1.20.1-forge") {
+        transitive = false
+    }
+}
+
+// If FlightAssistant is provided as a local jar in libs/, use that instead:
+if (file("libs/FlightAssistant-${project.flightassistant_version}.jar").exists()) {
+    dependencies {
+        compileOnly fg.deobf(files("libs/FlightAssistant-${project.flightassistant_version}.jar"))
+    }
+}
+
+mixin {
+    add sourceSets.main, 'flightassistant_xaero_compat.refmap.json'
+    config 'flightassistant_xaero_compat.mixins.json'
+}
+
+jar {
+    manifest {
+        attributes([
+            'Specification-Title'     : project.mod_id,
+            'Specification-Vendor'    : project.mod_authors,
+            'Specification-Version'   : '1',
+            'Implementation-Title'    : project.name,
+            'Implementation-Version'  : project.jar.archiveVersion,
+            'Implementation-Vendor'   : project.mod_authors,
+            'Implementation-Timestamp': new Date().format("yyyy-MM-dd'T'HH:mm:ssZ"),
+            'MixinConfigs'            : 'flightassistant_xaero_compat.mixins.json'
+        ])
+    }
+}
+
+jar.finalizedBy('reobfJar')
+
+publishing {
+    publications {
+        register('mavenJava', MavenPublication) {
+            artifact jar
+        }
+    }
+    repositories {
+        maven {
+            url "file://${project.projectDir}/mcmodsrepo"
+        }
+    }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+}

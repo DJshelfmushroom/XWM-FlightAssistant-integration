@@ -1,0 +1,520 @@
+package dev.djshelfmushroom.flightassistantxaerocompat.compat;
+
+import dev.djshelfmushroom.flightassistantxaerocompat.FlightAssistantXaeroCompat;
+import net.minecraft.client.Minecraft;
+import net.minecraft.network.chat.Component;
+import net.minecraft.resources.ResourceLocation;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
+import java.util.Collections;
+import java.util.List;
+import java.util.UUID;
+
+/**
+ * All FlightAssistant API / reflection access is isolated here so that only
+ * this file needs to change when FlightAssistant updates.
+ *
+ * <p>Every reflected field/method access is marked with a comment noting that
+ * it was verified against FlightAssistant 3.0.1. All access is wrapped in
+ * try/catch blocks so that failures are non-fatal.</p>
+ *
+ * <p>FlightAssistant 3.0.1 package root: {@code ru.octol1ttle.flightassistant}</p>
+ */
+public class FlightAssistantCompat {
+
+    private static final Logger LOGGER = LogManager.getLogger(FlightAssistantXaeroCompat.MOD_ID);
+
+    // -------------------------------------------------------------------------
+    // Fully-qualified class names (verified against FA 3.0.1)
+    // -------------------------------------------------------------------------
+
+    /**
+     * The ComputerHost singleton — FA 3.0.1's {@code internal object ComputerHost}.
+     * In JVM bytecode, Kotlin {@code internal object} compiles to a class with a
+     * public {@code INSTANCE} field.
+     *
+     * <p>Verified against FA 3.0.1: ComputerHost.kt</p>
+     */
+    private static final String CLASS_COMPUTER_HOST =
+            "ru.octol1ttle.flightassistant.impl.computer.ComputerHost";
+
+    /**
+     * Manages autopilot modes.
+     * <p>Verified against FA 3.0.1: AutoFlightComputer.kt</p>
+     */
+    private static final String CLASS_AUTO_FLIGHT_COMPUTER =
+            "ru.octol1ttle.flightassistant.impl.computer.autoflight.AutoFlightComputer";
+
+    /**
+     * Contains the flight plan (departure, enroute list, arrival).
+     * <p>Verified against FA 3.0.1: FlightPlanComputer.kt</p>
+     */
+    private static final String CLASS_FLIGHT_PLAN_COMPUTER =
+            "ru.octol1ttle.flightassistant.impl.computer.autoflight.FlightPlanComputer";
+
+    /**
+     * The COORDS lateral mode — flies toward fixed X/Z coordinates.
+     * <p>Verified against FA 3.0.1: BuiltInLateralModes.kt,
+     * class {@code DirectCoordinatesLateralMode(targetX: Int, targetZ: Int,
+     * textOverride: Component? = null)}</p>
+     */
+    private static final String CLASS_DIRECT_COORDS_LATERAL =
+            "ru.octol1ttle.flightassistant.impl.computer.autoflight.modes.DirectCoordinatesLateralMode";
+
+    /**
+     * A single enroute waypoint in the flight plan.
+     * <p>Verified against FA 3.0.1: FlightPlanComputer.kt,
+     * nested data class {@code EnrouteWaypoint(coordinatesX, coordinatesZ,
+     * altitude, speed, active, uuid)}</p>
+     */
+    private static final String CLASS_ENROUTE_WAYPOINT =
+            "ru.octol1ttle.flightassistant.impl.computer.autoflight.FlightPlanComputer$EnrouteWaypoint";
+
+    /**
+     * The {@code Active} state enum nested inside {@code EnrouteWaypoint}.
+     * <p>Verified against FA 3.0.1: FlightPlanComputer.kt</p>
+     */
+    private static final String CLASS_ENROUTE_ACTIVE =
+            "ru.octol1ttle.flightassistant.impl.computer.autoflight.FlightPlanComputer$EnrouteWaypoint$Active";
+
+    // ResourceLocation IDs for each computer (verified against FA 3.0.1)
+    // AutoFlightComputer.ID = FlightAssistant.id("auto_flight")
+    private static final ResourceLocation ID_AUTO_FLIGHT =
+            new ResourceLocation("flightassistant", "auto_flight");
+    // FlightPlanComputer.ID = FlightAssistant.id("flight_plan")
+    private static final ResourceLocation ID_FLIGHT_PLAN =
+            new ResourceLocation("flightassistant", "flight_plan");
+
+    // -------------------------------------------------------------------------
+    // Chat prefix shared by all user-visible messages
+    // -------------------------------------------------------------------------
+    private static final String CHAT_PREFIX = "§7[FlightAssistant] §r";
+
+    // =========================================================================
+    // Computer access helpers
+    // =========================================================================
+
+    /**
+     * Returns the {@code ComputerHost.INSTANCE} singleton, or {@code null}.
+     *
+     * <p>Verified against FA 3.0.1: {@code internal object ComputerHost} →
+     * JVM class with public static {@code INSTANCE} field.</p>
+     */
+    private static Object getComputerHost() {
+        try {
+            Class<?> clazz = Class.forName(CLASS_COMPUTER_HOST);
+            // Kotlin objects compile to a class with a public static INSTANCE field
+            Field instance = clazz.getDeclaredField("INSTANCE");
+            instance.setAccessible(true);
+            return instance.get(null);
+        } catch (Exception e) {
+            LOGGER.warn("[FACompat] getComputerHost failed: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Retrieves a specific computer from the {@code ComputerHost} by its
+     * {@code ResourceLocation} ID.
+     *
+     * <p>Verified against FA 3.0.1: {@code ModuleView.get(ResourceLocation)} is
+     * implemented by {@code ComputerHost}.</p>
+     */
+    private static Object getComputer(ResourceLocation id) {
+        Object host = getComputerHost();
+        if (host == null) return null;
+        try {
+            // Verified against FA 3.0.1: ComputerHost.get(ResourceLocation)
+            Method get = host.getClass().getMethod("get", ResourceLocation.class);
+            return get.invoke(host, id);
+        } catch (Exception e) {
+            LOGGER.warn("[FACompat] getComputer({}) failed: {}", id, e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Returns the {@code AutoFlightComputer} instance, or {@code null}.
+     *
+     * <p>Verified against FA 3.0.1: {@code AutoFlightComputer.ID =
+     * FlightAssistant.id("auto_flight")}</p>
+     */
+    public static Object getAutoFlightComputer() {
+        return getComputer(ID_AUTO_FLIGHT);
+    }
+
+    /**
+     * Returns the {@code FlightPlanComputer} instance, or {@code null}.
+     *
+     * <p>Verified against FA 3.0.1: {@code FlightPlanComputer.ID =
+     * FlightAssistant.id("flight_plan")}</p>
+     */
+    public static Object getFlightPlanComputer() {
+        return getComputer(ID_FLIGHT_PLAN);
+    }
+
+    // =========================================================================
+    // AutoFlightComputer helpers
+    // =========================================================================
+
+    /**
+     * Returns {@code true} if the autopilot is currently engaged.
+     *
+     * <p>Verified against FA 3.0.1: {@code AutoFlightComputer.autopilot: Boolean}
+     * → JVM getter {@code getAutopilot()}.</p>
+     */
+    public static boolean isAutopilotEngaged() {
+        Object afc = getAutoFlightComputer();
+        if (afc == null) return false;
+        try {
+            // Verified against FA 3.0.1: getAutopilot() on AutoFlightComputer
+            Method getter = afc.getClass().getMethod("getAutopilot");
+            Object val = getter.invoke(afc);
+            return Boolean.TRUE.equals(val);
+        } catch (Exception e) {
+            LOGGER.warn("[FACompat] isAutopilotEngaged failed: {}", e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * Sets FlightAssistant's lateral autopilot mode to {@code COORDS} and
+     * updates the COORDS target to the given X/Z position.
+     *
+     * <p>Only the lateral mode is modified. Vertical and thrust modes are left
+     * completely untouched.</p>
+     *
+     * <p>Verified against FA 3.0.1:
+     * <ul>
+     *   <li>{@code AutoFlightComputer.selectedLateralMode: LateralMode?} —
+     *       JVM setter {@code setSelectedLateralMode(LateralMode)}</li>
+     *   <li>{@code DirectCoordinatesLateralMode(targetX: Int, targetZ: Int,
+     *       textOverride: Component?)} — primary constructor</li>
+     * </ul>
+     * </p>
+     *
+     * @param x world X coordinate of the target
+     * @param z world Z coordinate of the target
+     * @return {@code true} if the change was applied successfully
+     */
+    public static boolean setCoordsTarget(double x, double z) {
+        Object afc = getAutoFlightComputer();
+        if (afc == null) {
+            LOGGER.warn("[FACompat] setCoordsTarget: AutoFlightComputer not available");
+            return false;
+        }
+        try {
+            // Build a DirectCoordinatesLateralMode(targetX: Int, targetZ: Int, textOverride: Component?)
+            // Verified against FA 3.0.1: BuiltInLateralModes.kt
+            Class<?> modeClass = Class.forName(CLASS_DIRECT_COORDS_LATERAL);
+            // Primary constructor: (int, int, Component) — textOverride has a Kotlin default of null
+            Object modeInstance = modeClass
+                    .getDeclaredConstructor(int.class, int.class, Component.class)
+                    .newInstance((int) x, (int) z, null);
+
+            // Call setSelectedLateralMode(LateralMode?)
+            // Verified against FA 3.0.1: Kotlin var selectedLateralMode generates setSelectedLateralMode
+            Method setter = findMethodByName(afc.getClass(), "setSelectedLateralMode");
+            if (setter == null) {
+                LOGGER.warn("[FACompat] setSelectedLateralMode not found on AutoFlightComputer");
+                return false;
+            }
+            setter.setAccessible(true);
+            setter.invoke(afc, modeInstance);
+            return true;
+
+        } catch (Exception e) {
+            LOGGER.warn("[FACompat] setCoordsTarget failed: {}", e.getMessage());
+            return false;
+        }
+    }
+
+    // =========================================================================
+    // FlightPlanComputer helpers
+    // =========================================================================
+
+    /**
+     * Returns the enroute waypoint list from the current flight plan.
+     *
+     * <p>Verified against FA 3.0.1: {@code FlightPlanComputer.enrouteData:
+     * MutableList<EnrouteWaypoint>} — JVM getter {@code getEnrouteData()}.</p>
+     */
+    @SuppressWarnings("unchecked")
+    public static List<Object> getEnrouteWaypoints() {
+        Object plan = getFlightPlanComputer();
+        if (plan == null) return Collections.emptyList();
+        try {
+            // Verified against FA 3.0.1: getEnrouteData() on FlightPlanComputer
+            Method getter = plan.getClass().getMethod("getEnrouteData");
+            Object list = getter.invoke(plan);
+            if (list instanceof List) return (List<Object>) list;
+        } catch (Exception e) {
+            LOGGER.warn("[FACompat] getEnrouteWaypoints failed: {}", e.getMessage());
+        }
+        return Collections.emptyList();
+    }
+
+    /**
+     * Returns the departure data object (or {@code null} if default / unset).
+     *
+     * <p>Verified against FA 3.0.1: {@code FlightPlanComputer.departureData:
+     * DepartureData} — JVM getter {@code getDepartureData()}.</p>
+     */
+    public static Object getDepartureData() {
+        Object plan = getFlightPlanComputer();
+        if (plan == null) return null;
+        try {
+            // Verified against FA 3.0.1: getDepartureData() on FlightPlanComputer
+            Method getter = plan.getClass().getMethod("getDepartureData");
+            return getter.invoke(plan);
+        } catch (Exception e) {
+            LOGGER.warn("[FACompat] getDepartureData failed: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Returns the arrival data object (or {@code null} if default / unset).
+     *
+     * <p>Verified against FA 3.0.1: {@code FlightPlanComputer.arrivalData:
+     * ArrivalData} — JVM getter {@code getArrivalData()}.</p>
+     */
+    public static Object getArrivalData() {
+        Object plan = getFlightPlanComputer();
+        if (plan == null) return null;
+        try {
+            // Verified against FA 3.0.1: getArrivalData() on FlightPlanComputer
+            Method getter = plan.getClass().getMethod("getArrivalData");
+            return getter.invoke(plan);
+        } catch (Exception e) {
+            LOGGER.warn("[FACompat] getArrivalData failed: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Reads the X coordinate of any flight-plan position object
+     * (DepartureData, EnrouteWaypoint, or ArrivalData).
+     *
+     * <p>Verified against FA 3.0.1: all three data classes have
+     * {@code coordinatesX: Int} → JVM getter {@code getCoordinatesX()}.</p>
+     */
+    public static Integer getPlanCoordinatesX(Object dataObj) {
+        if (dataObj == null) return null;
+        try {
+            // Verified against FA 3.0.1: getCoordinatesX() on DepartureData/EnrouteWaypoint/ArrivalData
+            Method m = dataObj.getClass().getMethod("getCoordinatesX");
+            Object v = m.invoke(dataObj);
+            if (v instanceof Number) return ((Number) v).intValue();
+        } catch (Exception e) {
+            LOGGER.warn("[FACompat] getPlanCoordinatesX failed: {}", e.getMessage());
+        }
+        return null;
+    }
+
+    /**
+     * Reads the Z coordinate of any flight-plan position object.
+     *
+     * <p>Verified against FA 3.0.1: all three data classes have
+     * {@code coordinatesZ: Int} → JVM getter {@code getCoordinatesZ()}.</p>
+     */
+    public static Integer getPlanCoordinatesZ(Object dataObj) {
+        if (dataObj == null) return null;
+        try {
+            // Verified against FA 3.0.1: getCoordinatesZ() on DepartureData/EnrouteWaypoint/ArrivalData
+            Method m = dataObj.getClass().getMethod("getCoordinatesZ");
+            Object v = m.invoke(dataObj);
+            if (v instanceof Number) return ((Number) v).intValue();
+        } catch (Exception e) {
+            LOGGER.warn("[FACompat] getPlanCoordinatesZ failed: {}", e.getMessage());
+        }
+        return null;
+    }
+
+    /**
+     * Reads the target altitude of an enroute waypoint.
+     *
+     * <p>Verified against FA 3.0.1: {@code EnrouteWaypoint.altitude: Int}
+     * → JVM getter {@code getAltitude()}.</p>
+     */
+    public static Integer getEnrouteAltitude(Object waypointObj) {
+        if (waypointObj == null) return null;
+        try {
+            // Verified against FA 3.0.1: getAltitude() on EnrouteWaypoint
+            Method m = waypointObj.getClass().getMethod("getAltitude");
+            Object v = m.invoke(waypointObj);
+            if (v instanceof Number) return ((Number) v).intValue();
+        } catch (Exception e) {
+            LOGGER.warn("[FACompat] getEnrouteAltitude failed: {}", e.getMessage());
+        }
+        return null;
+    }
+
+    /**
+     * Returns the index of the active (TARGET) enroute waypoint, or {@code -1}.
+     *
+     * <p>Verified against FA 3.0.1: {@code EnrouteWaypoint.active: Active?}
+     * where {@code Active.TARGET} marks the currently targeted waypoint.</p>
+     */
+    public static int getActiveWaypointIndex() {
+        List<Object> wps = getEnrouteWaypoints();
+        try {
+            Class<?> activeClass = Class.forName(CLASS_ENROUTE_ACTIVE);
+            // Find the enum constant "TARGET"
+            Object targetConstant = null;
+            for (Object c : activeClass.getEnumConstants()) {
+                if ("TARGET".equals(((Enum<?>) c).name())) {
+                    targetConstant = c;
+                    break;
+                }
+            }
+            if (targetConstant == null) return -1;
+
+            for (int i = 0; i < wps.size(); i++) {
+                Object wp = wps.get(i);
+                // Verified against FA 3.0.1: getActive() on EnrouteWaypoint
+                Method getActive = wp.getClass().getMethod("getActive");
+                Object active = getActive.invoke(wp);
+                if (targetConstant.equals(active)) return i;
+            }
+        } catch (Exception e) {
+            LOGGER.warn("[FACompat] getActiveWaypointIndex failed: {}", e.getMessage());
+        }
+        return -1;
+    }
+
+    /**
+     * Returns true if a departure or arrival data object is the default (empty) sentinel.
+     *
+     * <p>Verified against FA 3.0.1: {@code DepartureData.isDefault()} and
+     * {@code ArrivalData.isDefault()}.</p>
+     */
+    public static boolean isPlanDataDefault(Object dataObj) {
+        if (dataObj == null) return true;
+        try {
+            // Verified against FA 3.0.1: isDefault() on DepartureData and ArrivalData
+            Method m = dataObj.getClass().getMethod("isDefault");
+            Object result = m.invoke(dataObj);
+            return Boolean.TRUE.equals(result);
+        } catch (Exception e) {
+            // If the method doesn't exist, treat as non-default (i.e., has data)
+        }
+        return false;
+    }
+
+    /**
+     * Appends a new waypoint to the end of the enroute waypoint list.
+     *
+     * <p>This method is safe to call while the autopilot is active — it only
+     * appends, never reorders.</p>
+     *
+     * <p>Verified against FA 3.0.1:
+     * <ul>
+     *   <li>{@code FlightPlanComputer.enrouteData: MutableList<EnrouteWaypoint>}
+     *       — the backing ArrayList is mutated directly via the returned List ref</li>
+     *   <li>{@code EnrouteWaypoint(coordinatesX: Int, coordinatesZ: Int,
+     *       altitude: Int, speed: Int, active: Active?, uuid: UUID)}
+     *       — primary constructor (6 params)</li>
+     * </ul>
+     * </p>
+     *
+     * @param x        world X coordinate (converted to int)
+     * @param z        world Z coordinate (converted to int)
+     * @param altitude target altitude in blocks (Y, converted to int)
+     * @param speed    optional target speed (pass {@code null} to use 0 = unset)
+     * @return {@code true} if the waypoint was added successfully
+     */
+    @SuppressWarnings("unchecked")
+    public static boolean addEnrouteWaypoint(double x, double z, double altitude, Double speed) {
+        List<Object> waypoints = getEnrouteWaypoints();
+        if (waypoints == null) {
+            LOGGER.warn("[FACompat] addEnrouteWaypoint: could not obtain enroute waypoint list");
+            return false;
+        }
+        try {
+            Class<?> wpClass = Class.forName(CLASS_ENROUTE_WAYPOINT);
+            Class<?> activeClass = Class.forName(CLASS_ENROUTE_ACTIVE);
+
+            // Verified against FA 3.0.1: primary constructor (int, int, int, int, Active?, UUID)
+            Object newWaypoint = wpClass
+                    .getDeclaredConstructor(int.class, int.class, int.class, int.class, activeClass, UUID.class)
+                    .newInstance(
+                            (int) x,
+                            (int) z,
+                            (int) altitude,
+                            speed != null ? speed.intValue() : 0,
+                            null,            // active = null (not yet navigating to it)
+                            UUID.randomUUID()
+                    );
+
+            waypoints.add(newWaypoint);
+            return true;
+
+        } catch (NoSuchMethodException ex) {
+            // Fallback for synthetic constructor with Kotlin default-parameter marker
+            // mask = 0b110000 = 48 → use defaults for params 4 (active) and 5 (uuid)
+            try {
+                Class<?> wpClass     = Class.forName(CLASS_ENROUTE_WAYPOINT);
+                Class<?> activeClass = Class.forName(CLASS_ENROUTE_ACTIVE);
+                Class<?> marker = Class.forName("kotlin.jvm.internal.DefaultConstructorMarker");
+                Object newWaypoint = wpClass
+                        .getDeclaredConstructor(int.class, int.class, int.class, int.class,
+                                activeClass, UUID.class, int.class, marker)
+                        .newInstance(
+                                (int) x,
+                                (int) z,
+                                (int) altitude,
+                                speed != null ? speed.intValue() : 0,
+                                null, null,  // replaced by defaults (active=null, uuid=random)
+                                48,          // mask: bits 4+5 → use defaults
+                                null         // DefaultConstructorMarker
+                        );
+                waypoints.add(newWaypoint);
+                return true;
+            } catch (Exception e2) {
+                LOGGER.warn("[FACompat] addEnrouteWaypoint (fallback) failed: {}", e2.getMessage());
+                return false;
+            }
+        } catch (Exception e) {
+            LOGGER.warn("[FACompat] addEnrouteWaypoint failed: {}", e.getMessage());
+            return false;
+        }
+    }
+
+    // =========================================================================
+    // Utility helpers
+    // =========================================================================
+
+    /** Searches a class (and supertypes) for a method matching the given name. */
+    private static Method findMethodByName(Class<?> clazz, String name) {
+        Class<?> current = clazz;
+        while (current != null) {
+            for (Method m : current.getDeclaredMethods()) {
+                if (m.getName().equals(name)) return m;
+            }
+            for (Class<?> iface : current.getInterfaces()) {
+                for (Method m : iface.getDeclaredMethods()) {
+                    if (m.getName().equals(name)) return m;
+                }
+            }
+            current = current.getSuperclass();
+        }
+        return null;
+    }
+
+    // =========================================================================
+    // Chat helpers
+    // =========================================================================
+
+    /** Sends a prefixed message to the local player's chat HUD. */
+    public static void sendChatMessage(String text) {
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.player != null) {
+            mc.player.sendSystemMessage(Component.literal(CHAT_PREFIX + text));
+        }
+    }
+}
+

@@ -58,48 +58,71 @@ cd XWM-FlightAssistant-integration
 
 ## 3. Resolve Dependencies
 
-### Xaero's World Map
+The two compile-only dependencies (Xaero's World Map and FlightAssistant) are
+each resolved in order of preference:
+
+1. **Local jar** in the `libs/` directory — no network needed at all.
+2. **Remote Maven** — downloaded automatically if no local jar is present.
+
+The `libs/` directory already exists in the repository. JAR files placed there
+are listed in `.gitignore` and will never be accidentally committed.
+
+> **Why can't everything be bundled?**
+> Gradle itself, the ForgeGradle build plugin, and the Minecraft/Forge game
+> data are downloaded on the first build and cached in `~/.gradle/`. They are
+> hundreds of megabytes in size (and the Minecraft assets are proprietary), so
+> they cannot be shipped inside this repository. A one-time internet connection
+> is always required on a fresh machine.
+
+### Xaero's World Map — automatic (default)
 
 Resolved automatically from [Xaero's Maven](https://maven.xeadmc.net/).
 No manual action needed.
 
-Relevant `build.gradle` block:
+### Xaero's World Map — local jar (fallback)
 
-```groovy
-maven {
-    name = "Xaero's Maven"
-    url = "https://maven.xeadmc.net/"
-}
-// ...
-compileOnly fg.deobf("xaero.public.maven:XaeroWorldMap:1.39.2_Forge_1.20.1")
-```
+If Xaero's Maven is unreachable, place the JAR in `libs/` and the build will
+use it automatically:
 
-### FlightAssistant — Modrinth (automatic)
+1. Download **XaeroWorldMap-1.39.2_Forge_1.20.1.jar** from the
+   [Xaero's World Map CurseForge page](https://www.curseforge.com/minecraft/mc-mods/xaeros-world-map/files)
+   (filter by **Forge 1.20.1**, pick version **1.39.2**) or directly from
+   Xaero's Maven:
+   ```
+   https://maven.xeadmc.net/xaero/public/maven/XaeroWorldMap/1.39.2_Forge_1.20.1/XaeroWorldMap-1.39.2_Forge_1.20.1.jar
+   ```
+
+2. Place the downloaded file in the `libs/` folder:
+   ```
+   XWM-FlightAssistant-integration/
+   └── libs/
+       └── XaeroWorldMap-1.39.2_Forge_1.20.1.jar   ← place the jar here
+   ```
+
+3. `build.gradle` automatically detects the file and skips the remote Maven
+   lookup:
+   ```groovy
+   def localXaeroJar = file("libs/XaeroWorldMap-${project.xaero_worldmap_version}.jar")
+   if (localXaeroJar.exists()) {
+       compileOnly fg.deobf(files(localXaeroJar))
+   } else {
+       compileOnly fg.deobf("xaero.public.maven:XaeroWorldMap:${project.xaero_worldmap_version}")
+   }
+   ```
+
+### FlightAssistant — automatic (default)
 
 By default, FlightAssistant is resolved from
-[Modrinth's Maven mirror](https://api.modrinth.com/maven):
-
-```groovy
-maven {
-    name = "Modrinth Maven"
-    url = "https://api.modrinth.com/maven"
-}
-// ...
-compileOnly fg.deobf("maven.modrinth:flightassistant:3.0.1+1.20.1-forge") {
-    transitive = false
-}
-```
-
-This requires no manual action. If the Modrinth Maven is unavailable or the
-artifact is unlisted, use the local-jar fallback below.
+[Modrinth's Maven mirror](https://api.modrinth.com/maven). No manual action
+needed. If the Modrinth Maven is unavailable or the artifact is unlisted, use
+the local-jar fallback below.
 
 ### FlightAssistant — local jar (fallback)
 
 1. Download **FlightAssistant-3.0.1.jar** (the Forge build) from the
    [GitHub Releases page](https://github.com/Octol1ttle/FlightAssistant/releases/tag/3.0.1).
 
-2. Create a `libs/` directory in the project root (it is `.gitignore`-d so it
-   will not be committed):
+2. Place the downloaded file in the `libs/` folder:
 
    ```
    XWM-FlightAssistant-integration/
@@ -107,13 +130,16 @@ artifact is unlisted, use the local-jar fallback below.
        └── FlightAssistant-3.0.1.jar   ← place the jar here
    ```
 
-3. The `build.gradle` checks for this file at **configuration time** and
-   automatically uses it instead of the Modrinth coordinate when present:
+3. `build.gradle` automatically detects the file and skips the remote Maven
+   lookup:
 
    ```groovy
-   if (file("libs/FlightAssistant-${project.flightassistant_version}.jar").exists()) {
-       dependencies {
-           compileOnly fg.deobf(files("libs/FlightAssistant-3.0.1.jar"))
+   def localFAJar = file("libs/FlightAssistant-${project.flightassistant_version}.jar")
+   if (localFAJar.exists()) {
+       compileOnly fg.deobf(files(localFAJar))
+   } else {
+       compileOnly fg.deobf("maven.modrinth:flightassistant:${project.flightassistant_version}+1.20.1-forge") {
+           transitive = false
        }
    }
    ```

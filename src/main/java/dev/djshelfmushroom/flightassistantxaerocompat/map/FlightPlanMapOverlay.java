@@ -74,6 +74,11 @@ public class FlightPlanMapOverlay {
         double cameraX = XaeroCompat.getGuiMapCameraX(guiMap);
         double cameraZ = XaeroCompat.getGuiMapCameraZ(guiMap);
         double scale   = XaeroCompat.getGuiMapScale(guiMap);
+        double screenScale = XaeroCompat.getGuiMapScreenScale(guiMap);
+        double effectiveScale = scale / screenScale;
+        if (effectiveScale <= 0.0) {
+            effectiveScale = 1.0;
+        }
         int screenW    = guiMap.width;
         int screenH    = guiMap.height;
 
@@ -103,7 +108,7 @@ public class FlightPlanMapOverlay {
 
         // --- Draw route line ---
         if (routePoints.size() >= 2) {
-            drawRouteLine(routePoints, cameraX, cameraZ, scale, screenW, screenH);
+            drawRouteLine(routePoints, cameraX, cameraZ, effectiveScale, screenW, screenH);
         }
 
         // --- Draw departure marker ---
@@ -111,8 +116,8 @@ public class FlightPlanMapOverlay {
             Integer dx = FlightAssistantCompat.getPlanCoordinatesX(departure);
             Integer dz = FlightAssistantCompat.getPlanCoordinatesZ(departure);
             if (dx != null && dz != null) {
-                float sx = (float)(screenW / 2.0 + (dx - cameraX) * scale);
-                float sy = (float)(screenH / 2.0 + (dz - cameraZ) * scale);
+                float sx = (float)(screenW / 2.0 + (dx - cameraX) * effectiveScale);
+                float sy = (float)(screenH / 2.0 + (dz - cameraZ) * effectiveScale);
                 drawMarker(graphics, sx, sy, COLOR_DEPARTURE);
                 graphics.drawString(
                         net.minecraft.client.Minecraft.getInstance().font,
@@ -130,8 +135,8 @@ public class FlightPlanMapOverlay {
                 Integer alt = FlightAssistantCompat.getEnrouteAltitude(wp);
                 if (wx == null || wz == null) continue;
 
-                float sx = (float)(screenW / 2.0 + (wx - cameraX) * scale);
-                float sy = (float)(screenH / 2.0 + (wz - cameraZ) * scale);
+                float sx = (float)(screenW / 2.0 + (wx - cameraX) * effectiveScale);
+                float sy = (float)(screenH / 2.0 + (wz - cameraZ) * effectiveScale);
                 int color = (i == activeIdx) ? COLOR_ACTIVE : COLOR_ENROUTE;
                 drawMarker(graphics, sx, sy, color);
 
@@ -148,8 +153,8 @@ public class FlightPlanMapOverlay {
             Integer ax = FlightAssistantCompat.getPlanCoordinatesX(arrival);
             Integer az = FlightAssistantCompat.getPlanCoordinatesZ(arrival);
             if (ax != null && az != null) {
-                float sx = (float)(screenW / 2.0 + (ax - cameraX) * scale);
-                float sy = (float)(screenH / 2.0 + (az - cameraZ) * scale);
+                float sx = (float)(screenW / 2.0 + (ax - cameraX) * effectiveScale);
+                float sy = (float)(screenH / 2.0 + (az - cameraZ) * effectiveScale);
                 drawMarker(graphics, sx, sy, COLOR_ARRIVAL);
                 graphics.drawString(
                         net.minecraft.client.Minecraft.getInstance().font,

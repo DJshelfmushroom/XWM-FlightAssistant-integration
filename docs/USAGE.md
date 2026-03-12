@@ -67,11 +67,9 @@ the waypoint's X/Z. A confirmation appears in chat:
 
 > **What changes vs. what doesn't:**
 > - ✅ **Lateral mode** is set to `COORDS` targeting the waypoint X/Z.
+> - ✅ **Autopilot** is engaged so the heading command takes effect immediately.
 > - ❌ **Vertical mode** (altitude hold, V/S, etc.) is **not** changed.
 > - ❌ **Thrust mode** (autothrottle) is **not** changed.
->
-> If the autopilot is already engaged, the change takes effect immediately and
-> the aircraft will begin turning toward the new target.
 
 ---
 

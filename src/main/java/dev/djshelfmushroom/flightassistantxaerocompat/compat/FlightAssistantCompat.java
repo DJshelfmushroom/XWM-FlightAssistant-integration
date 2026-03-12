@@ -143,7 +143,9 @@ public class FlightAssistantCompat {
      * FlightAssistant.id("auto_flight")}</p>
      */
     public static Object getAutoFlightComputer() {
-        return getComputer(ID_AUTO_FLIGHT);
+        Object computer = getComputer(ID_AUTO_FLIGHT);
+        if (computer != null) return computer;
+        return getComputerByHostGetter("getAutoflight");
     }
 
     /**
@@ -153,7 +155,25 @@ public class FlightAssistantCompat {
      * FlightAssistant.id("flight_plan")}</p>
      */
     public static Object getFlightPlanComputer() {
-        return getComputer(ID_FLIGHT_PLAN);
+        Object computer = getComputer(ID_FLIGHT_PLAN);
+        if (computer != null) return computer;
+        return getComputerByHostGetter("getPlan");
+    }
+
+    /**
+     * Fallback for cases where lookup by ResourceLocation fails:
+     * uses direct ComputerHost getters (e.g. getAutoflight/getPlan).
+     */
+    private static Object getComputerByHostGetter(String getterName) {
+        Object host = getComputerHost();
+        if (host == null) return null;
+        try {
+            Method getter = host.getClass().getMethod(getterName);
+            return getter.invoke(host);
+        } catch (Exception e) {
+            LOGGER.warn("[FACompat] {} fallback failed: {}", getterName, e.getMessage());
+            return null;
+        }
     }
 
     // =========================================================================
@@ -181,11 +201,10 @@ public class FlightAssistantCompat {
     }
 
     /**
-     * Sets FlightAssistant's lateral autopilot mode to {@code COORDS} and
-     * updates the COORDS target to the given X/Z position.
+     * Sets FlightAssistant's lateral mode to {@code COORDS}, updates the
+     * target to the given X/Z position, and engages autopilot.
      *
-     * <p>Only the lateral mode is modified. Vertical and thrust modes are left
-     * completely untouched.</p>
+     * <p>Vertical and thrust modes are left completely untouched.</p>
      *
      * <p>Verified against FA 3.0.1:
      * <ul>
@@ -193,6 +212,8 @@ public class FlightAssistantCompat {
      *       JVM setter {@code setSelectedLateralMode(LateralMode)}</li>
      *   <li>{@code DirectCoordinatesLateralMode(targetX: Int, targetZ: Int,
      *       textOverride: Component?)} — primary constructor</li>
+     *   <li>{@code AutoFlightComputer.setAutoPilot(Boolean, Boolean?)} —
+     *       engages autopilot so heading control is actually applied</li>
      * </ul>
      * </p>
      *
@@ -224,7 +245,7 @@ public class FlightAssistantCompat {
             }
             setter.setAccessible(true);
             setter.invoke(afc, modeInstance);
-            return true;
+            return enableAutoPilot(afc);
 
         } catch (Exception e) {
             LOGGER.warn("[FACompat] setCoordsTarget failed: {}", e.getMessage());
@@ -437,6 +458,7 @@ public class FlightAssistantCompat {
         try {
             Class<?> wpClass = Class.forName(CLASS_ENROUTE_WAYPOINT);
             Class<?> activeClass = Class.forName(CLASS_ENROUTE_ACTIVE);
+            Object activeTarget = hasAnyActiveWaypoint(waypoints) ? null : getEnumConstant(activeClass, "TARGET");
 
             // Verified against FA 3.0.1: primary constructor (int, int, int, int, Active?, UUID)
             Object newWaypoint = wpClass
@@ -446,7 +468,7 @@ public class FlightAssistantCompat {
                             (int) z,
                             (int) altitude,
                             speed != null ? speed.intValue() : 0,
-                            null,            // active = null (not yet navigating to it)
+                            activeTarget,
                             UUID.randomUUID()
                     );
 
@@ -472,6 +494,12 @@ public class FlightAssistantCompat {
                                 48,          // mask: bits 4+5 → use defaults
                                 null         // DefaultConstructorMarker
                         );
+                if (!hasAnyActiveWaypoint(waypoints)) {
+                    Object target = getEnumConstant(activeClass, "TARGET");
+                    if (target != null) {
+                        setWaypointActive(newWaypoint, target);
+                    }
+                }
                 waypoints.add(newWaypoint);
                 return true;
             } catch (Exception e2) {
@@ -487,6 +515,88 @@ public class FlightAssistantCompat {
     // =========================================================================
     // Utility helpers
     // =========================================================================
+
+    /** Enables FA autopilot so selected modes affect heading/pitch outputs. */
+    private static boolean enableAutoPilot(Object autoFlightComputer) {
+        if (autoFlightComputer == null) return false;
+        try {
+            Method setAutoPilot = findMethod(autoFlightComputer.getClass(), "setAutoPilot", boolean.class, Boolean.class);
+            if (setAutoPilot == null) {
+                LOGGER.warn("[FACompat] setAutoPilot(boolean, Boolean) not found");
+                return false;
+            }
+            setAutoPilot.setAccessible(true);
+            setAutoPilot.invoke(autoFlightComputer, true, null);
+            return true;
+        } catch (Exception e) {
+            LOGGER.warn("[FACompat] enableAutoPilot failed: {}", e.getMessage());
+            return false;
+        }
+    }
+
+    /** Returns true if any enroute waypoint is currently marked ORIGIN/TARGET. */
+    private static boolean hasAnyActiveWaypoint(List<Object> waypoints) {
+        if (waypoints == null || waypoints.isEmpty()) return false;
+        for (Object waypoint : waypoints) {
+            if (waypoint == null) continue;
+            try {
+                Method getter = findMethodByName(waypoint.getClass(), "getActive");
+                if (getter == null) continue;
+                getter.setAccessible(true);
+                if (getter.invoke(waypoint) != null) {
+                    return true;
+                }
+            } catch (Exception e) {
+                LOGGER.warn("[FACompat] hasAnyActiveWaypoint failed: {}", e.getMessage());
+                return false;
+            }
+        }
+        return false;
+    }
+
+    /** Sets the mutable {@code active} property on an enroute waypoint instance. */
+    private static void setWaypointActive(Object waypoint, Object active) throws Exception {
+        if (waypoint == null) return;
+        Method setter = findMethodByName(waypoint.getClass(), "setActive");
+        if (setter != null) {
+            setter.setAccessible(true);
+            setter.invoke(waypoint, active);
+        }
+    }
+
+    /** Finds an enum constant by name, returning null if unavailable. */
+    private static Object getEnumConstant(Class<?> enumClass, String name) {
+        if (enumClass == null || !enumClass.isEnum()) return null;
+        Object[] constants = enumClass.getEnumConstants();
+        if (constants == null) return null;
+        for (Object c : constants) {
+            if (c instanceof Enum<?> e && name.equals(e.name())) {
+                return c;
+            }
+        }
+        return null;
+    }
+
+    /** Searches class hierarchy for a method with an exact name/signature match. */
+    private static Method findMethod(Class<?> clazz, String name, Class<?>... paramTypes) {
+        Class<?> current = clazz;
+        while (current != null) {
+            try {
+                return current.getDeclaredMethod(name, paramTypes);
+            } catch (NoSuchMethodException ignored) {
+                // Continue searching
+            }
+            for (Class<?> iface : current.getInterfaces()) {
+                try {
+                    return iface.getDeclaredMethod(name, paramTypes);
+                } catch (NoSuchMethodException ignored) {
+                    // Continue searching
+                }
+            }
+            current = current.getSuperclass();
+        }
+        return null;
+    }
 
     /** Searches a class (and supertypes) for a method matching the given name. */
     private static Method findMethodByName(Class<?> clazz, String name) {
@@ -517,4 +627,3 @@ public class FlightAssistantCompat {
         }
     }
 }
-

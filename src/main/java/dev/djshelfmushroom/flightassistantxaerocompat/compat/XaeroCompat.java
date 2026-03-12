@@ -182,6 +182,15 @@ public class XaeroCompat {
         return s == 0.0 ? 1.0 : s;
     }
 
+    /**
+     * Reads the GUI scale used internally by Xaero's map screen.
+     * <p>Xaero 1.39.2: private {@code double screenScale} on GuiMap.</p>
+     */
+    public static double getGuiMapScreenScale(Object guiMap) {
+        double s = getDoubleField(guiMap, "screenScale");
+        return s <= 0.0 ? 1.0 : s;
+    }
+
     /** Reads a {@code double} field by name from any object; returns 0.0 on failure. */
     private static double getDoubleField(Object target, String fieldName) {
         if (target == null) return 0.0;
@@ -201,4 +210,3 @@ public class XaeroCompat {
         return 0.0;
     }
 }
-

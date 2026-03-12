@@ -21,7 +21,7 @@ import java.util.ArrayList;
  * <p>Three entries are added whenever FlightAssistant is loaded:</p>
  * <ol>
  *   <li><b>Fly Here (FlightAssistant)</b> — sets COORDS target to the right-clicked
- *       X/Z position with a tooltip.</li>
+ *       X/Z position.</li>
  *   <li><b>[FA] Set as COORDS Target</b> — same action in the FA section.</li>
  *   <li><b>[FA] Add to Flight Plan (Enroute)</b> — opens
  *       {@link WaypointAltitudeScreen}.</li>

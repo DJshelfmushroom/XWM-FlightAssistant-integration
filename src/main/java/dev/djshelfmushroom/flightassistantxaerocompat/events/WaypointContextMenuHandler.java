@@ -46,7 +46,7 @@ public class WaypointContextMenuHandler {
             FlightPlanMapOverlay.render(event.getGuiGraphics(), screen);
         } catch (Exception e) {
             FlightAssistantXaeroCompat.LOGGER.warn(
-                    "[FA-Xaero] FlightPlanMapOverlay.render failed: {}", e.getMessage());
+                    "[FA-Xaero] FlightPlanMapOverlay.render failed", e);
         }
     }
 

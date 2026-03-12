@@ -111,11 +111,12 @@ public class FlightPlanMapOverlay {
             Integer dx = FlightAssistantCompat.getPlanCoordinatesX(departure);
             Integer dz = FlightAssistantCompat.getPlanCoordinatesZ(departure);
             if (dx != null && dz != null) {
-                float[] screen = worldToScreen(dx, dz, cameraX, cameraZ, scale, screenW, screenH);
-                drawMarker(graphics, screen[0], screen[1], COLOR_DEPARTURE);
+                float sx = (float)(screenW / 2.0 + (dx - cameraX) * scale);
+                float sy = (float)(screenH / 2.0 + (dz - cameraZ) * scale);
+                drawMarker(graphics, sx, sy, COLOR_DEPARTURE);
                 graphics.drawString(
                         net.minecraft.client.Minecraft.getInstance().font,
-                        "DEP", (int) screen[0] + MARKER_HALF + 2, (int) screen[1] - 4,
+                        "DEP", (int) sx + MARKER_HALF + 2, (int) sy - 4,
                         TEXT_COLOR, true);
             }
         }
@@ -129,14 +130,15 @@ public class FlightPlanMapOverlay {
                 Integer alt = FlightAssistantCompat.getEnrouteAltitude(wp);
                 if (wx == null || wz == null) continue;
 
-                float[] screen = worldToScreen(wx, wz, cameraX, cameraZ, scale, screenW, screenH);
+                float sx = (float)(screenW / 2.0 + (wx - cameraX) * scale);
+                float sy = (float)(screenH / 2.0 + (wz - cameraZ) * scale);
                 int color = (i == activeIdx) ? COLOR_ACTIVE : COLOR_ENROUTE;
-                drawMarker(graphics, screen[0], screen[1], color);
+                drawMarker(graphics, sx, sy, color);
 
                 String label = (i + 1) + (alt != null ? "/" + alt : "");
                 graphics.drawString(
                         net.minecraft.client.Minecraft.getInstance().font,
-                        label, (int) screen[0] + MARKER_HALF + 2, (int) screen[1] - 4,
+                        label, (int) sx + MARKER_HALF + 2, (int) sy - 4,
                         TEXT_COLOR, true);
             }
         }
@@ -146,11 +148,12 @@ public class FlightPlanMapOverlay {
             Integer ax = FlightAssistantCompat.getPlanCoordinatesX(arrival);
             Integer az = FlightAssistantCompat.getPlanCoordinatesZ(arrival);
             if (ax != null && az != null) {
-                float[] screen = worldToScreen(ax, az, cameraX, cameraZ, scale, screenW, screenH);
-                drawMarker(graphics, screen[0], screen[1], COLOR_ARRIVAL);
+                float sx = (float)(screenW / 2.0 + (ax - cameraX) * scale);
+                float sy = (float)(screenH / 2.0 + (az - cameraZ) * scale);
+                drawMarker(graphics, sx, sy, COLOR_ARRIVAL);
                 graphics.drawString(
                         net.minecraft.client.Minecraft.getInstance().font,
-                        "ARR", (int) screen[0] + MARKER_HALF + 2, (int) screen[1] - 4,
+                        "ARR", (int) sx + MARKER_HALF + 2, (int) sy - 4,
                         TEXT_COLOR, true);
             }
         }
@@ -159,24 +162,6 @@ public class FlightPlanMapOverlay {
     // =========================================================================
     // Rendering primitives
     // =========================================================================
-
-    /**
-     * Converts a world X/Z coordinate to screen X/Y using the map's camera and
-     * zoom scale.
-     *
-     * <p>Xaero renders the map so that {@code (cameraX, cameraZ)} maps to the
-     * centre of the screen. {@code scale} is pixels-per-block.</p>
-     *
-     * @return {@code float[2]} containing screen X and screen Y
-     */
-    private static float[] worldToScreen(double worldX, double worldZ,
-                                         double cameraX, double cameraZ,
-                                         double scale,
-                                         int screenW, int screenH) {
-        float sx = (float) (screenW  / 2.0 + (worldX - cameraX) * scale);
-        float sy = (float) (screenH / 2.0 + (worldZ - cameraZ) * scale);
-        return new float[]{sx, sy};
-    }
 
     /**
      * Draws a small filled square centred at ({@code sx}, {@code sy}).
@@ -197,6 +182,9 @@ public class FlightPlanMapOverlay {
     /**
      * Draws a poly-line connecting the given world-coordinate waypoints.
      * The line is rendered using the Tesselator in {@code LINES} mode.
+     *
+     * <p>Screen coordinates are computed inline (no per-call allocation) using:
+     * {@code screenX = screenW/2 + (worldX - cameraX) * scale}</p>
      */
     private static void drawRouteLine(List<double[]> points,
                                       double cameraX, double cameraZ,
@@ -219,12 +207,12 @@ public class FlightPlanMapOverlay {
         buf.begin(VertexFormat.Mode.DEBUG_LINES, DefaultVertexFormat.POSITION_COLOR);
 
         for (int i = 0; i < points.size() - 1; i++) {
-            float[] from = worldToScreen(points.get(i)[0], points.get(i)[1],
-                    cameraX, cameraZ, scale, screenW, screenH);
-            float[] to   = worldToScreen(points.get(i + 1)[0], points.get(i + 1)[1],
-                    cameraX, cameraZ, scale, screenW, screenH);
-            buf.vertex(from[0], from[1], 0f).color(r, g, b, a).endVertex();
-            buf.vertex(  to[0],   to[1], 0f).color(r, g, b, a).endVertex();
+            float fromX = (float)(screenW / 2.0 + (points.get(i)[0]   - cameraX) * scale);
+            float fromY = (float)(screenH / 2.0 + (points.get(i)[1]   - cameraZ) * scale);
+            float toX   = (float)(screenW / 2.0 + (points.get(i+1)[0] - cameraX) * scale);
+            float toY   = (float)(screenH / 2.0 + (points.get(i+1)[1] - cameraZ) * scale);
+            buf.vertex(fromX, fromY, 0f).color(r, g, b, a).endVertex();
+            buf.vertex(  toX,   toY, 0f).color(r, g, b, a).endVertex();
         }
 
         tes.end();

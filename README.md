@@ -89,4 +89,4 @@ porting guide.
 
 ## License
 
-MIT — see [LICENSE](LICENSE) if present, otherwise consider the code freely reusable.
+This project is licensed under the [MIT License](LICENSE).

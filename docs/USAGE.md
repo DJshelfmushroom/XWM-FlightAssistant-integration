@@ -116,10 +116,10 @@ A small vanilla-styled dialog opens with two fields:
 └────────────────────────────────────┘
 ```
 
-| Field        | Required | Accepts       | Notes                                           |
-|--------------|----------|---------------|-------------------------------------------------|
-| **Alt (Y)**  | ✅ Yes   | Integer / decimal | Target altitude in blocks (world Y coordinate). The field starts blank — you must enter a value. |
-| **Speed**    | ❌ No    | Integer / decimal | Target speed. Leave blank to use FlightAssistant's default speed for that segment. |
+| Field        | Required | Accepts  | Notes                                           |
+|--------------|----------|----------|-------------------------------------------------|
+| **Alt (Y)**  | ✅ Yes   | Integer  | Target altitude in blocks (world Y coordinate). The field starts blank — you must enter a value. |
+| **Speed**    | ❌ No    | Integer  | Target speed. Leave blank to use FlightAssistant's default speed for that segment. |
 
 **Keyboard shortcuts:**
 
@@ -148,9 +148,6 @@ A confirmation appears in chat:
 ```
 [FlightAssistant] Flying to X: 256, Z: 800
 ```
-
-A tooltip on the menu entry reads:
-> *"Autopilot will circle the target. It will not land."*
 
 > The autopilot will orbit the target coordinates in `COORDS` mode.
 > It does not perform an automatic landing. You must switch to an approach/
@@ -205,23 +202,10 @@ with the data in white.
 | Fly Here                             | `[FlightAssistant] Flying to X: {x}, Z: {z}`                   |
 | Failed to set COORDS target          | `[FlightAssistant] Failed to set COORDS target — check logs.`   |
 | Failed to add waypoint               | `[FlightAssistant] Failed to add waypoint — check logs.`        |
-| Waypoint in wrong dimension          | `[FlightAssistant] Warning: Waypoint is in a different dimension.` |
 
 ---
 
 ## 8. Edge Cases & Warnings
-
-### Wrong dimension
-
-If a waypoint was created in a **different dimension** (e.g. a Nether waypoint
-while you are in the Overworld), FlightAssistant will receive coordinates that
-do not correspond to your current world. The mod detects this and shows:
-
-```
-[FlightAssistant] Warning: Waypoint is in a different dimension.
-```
-
-No change is made to the autopilot or flight plan.
 
 ### Missing mod
 

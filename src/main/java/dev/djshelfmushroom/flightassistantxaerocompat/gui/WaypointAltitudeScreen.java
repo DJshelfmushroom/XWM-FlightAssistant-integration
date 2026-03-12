@@ -6,6 +6,7 @@ import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
+import org.lwjgl.glfw.GLFW;
 
 /**
  * A small, vanilla-styled GUI screen that prompts the player to enter a target
@@ -28,10 +29,6 @@ public class WaypointAltitudeScreen extends Screen {
     private EditBox altitudeField;
     /** EditBox for the optional speed field. */
     private EditBox speedField;
-
-    /** Populated once the player confirms the form. */
-    private Double confirmedAltitude = null;
-    private Double confirmedSpeed    = null;
 
     // -------------------------------------------------------------------------
     // Constructor
@@ -148,14 +145,14 @@ public class WaypointAltitudeScreen extends Screen {
     @Override
     public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
         // Enter confirms if altitude is filled
-        if (keyCode == 257 /* GLFW_KEY_ENTER */ || keyCode == 335 /* numpad Enter */) {
+        if (keyCode == GLFW.GLFW_KEY_ENTER || keyCode == GLFW.GLFW_KEY_KP_ENTER) {
             if (isAltitudeValid()) {
                 onConfirm();
                 return true;
             }
         }
         // Escape cancels
-        if (keyCode == 256 /* GLFW_KEY_ESCAPE */) {
+        if (keyCode == GLFW.GLFW_KEY_ESCAPE) {
             onCancel();
             return true;
         }
@@ -178,7 +175,7 @@ public class WaypointAltitudeScreen extends Screen {
 
     private boolean isAltitudeValid() {
         try {
-            Double.parseDouble(altitudeField.getValue().trim());
+            Integer.parseInt(altitudeField.getValue().trim());
             return true;
         } catch (NumberFormatException e) {
             return false;
@@ -193,33 +190,30 @@ public class WaypointAltitudeScreen extends Screen {
             return;
         }
 
-        double altitude;
+        int altitude;
         try {
-            altitude = Double.parseDouble(altText);
+            altitude = Integer.parseInt(altText);
         } catch (NumberFormatException e) {
             altitudeField.setFocused(true);
             return;
         }
 
-        Double speed = null;
+        Integer speed = null;
         String speedText = speedField.getValue().trim();
         if (!speedText.isEmpty()) {
             try {
-                speed = Double.parseDouble(speedText);
+                speed = Integer.parseInt(speedText);
             } catch (NumberFormatException ignored) {
                 // Invalid speed — treat as unset rather than aborting
             }
         }
 
-        confirmedAltitude = altitude;
-        confirmedSpeed    = speed;
-
         boolean added = FlightAssistantCompat.addEnrouteWaypoint(
-                waypointX, waypointZ, altitude, speed);
+                waypointX, waypointZ, altitude, speed != null ? (double) speed : null);
 
         if (added) {
             FlightAssistantCompat.sendChatMessage(
-                    String.format("§fWaypoint added: X: %.0f, Z: %.0f, ALT: %.0f",
+                    String.format("§fWaypoint added: X: %.0f, Z: %.0f, ALT: %d",
                             waypointX, waypointZ, altitude));
         } else {
             FlightAssistantCompat.sendChatMessage(

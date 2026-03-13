@@ -5,6 +5,7 @@ import dev.djshelfmushroom.flightassistantxaerocompat.compat.FlightAssistantComp
 import dev.djshelfmushroom.flightassistantxaerocompat.gui.WaypointAltitudeScreen;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.world.level.levelgen.Heightmap;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.injection.At;
@@ -126,10 +127,11 @@ public abstract class MixinGuiMap {
         options.add(new RightClickOption("[FA] Set as Departure", options.size(), self) {
             @Override
             public void onAction(Screen screen) {
-                boolean ok = FlightAssistantCompat.setDepartureWaypoint(clickX, clickZ);
+                int elevation = terrainElevation(clickX, clickZ);
+                boolean ok = FlightAssistantCompat.setDepartureWaypoint(clickX, clickZ, elevation);
                 if (ok) {
                     FlightAssistantCompat.sendChatMessage(
-                            String.format(Locale.ROOT, "§fDeparture set to X: %d, Z: %d", clickX, clickZ));
+                            String.format(Locale.ROOT, "§fDeparture set to X: %d, Z: %d (elev: %d)", clickX, clickZ, elevation));
                 } else {
                     FlightAssistantCompat.sendChatMessage(
                             "§cFailed to set departure — check logs.");
@@ -141,16 +143,29 @@ public abstract class MixinGuiMap {
         options.add(new RightClickOption("[FA] Set as Arrival", options.size(), self) {
             @Override
             public void onAction(Screen screen) {
-                boolean ok = FlightAssistantCompat.setArrivalWaypoint(clickX, clickZ);
+                int elevation = terrainElevation(clickX, clickZ);
+                boolean ok = FlightAssistantCompat.setArrivalWaypoint(clickX, clickZ, elevation);
                 if (ok) {
                     FlightAssistantCompat.sendChatMessage(
-                            String.format(Locale.ROOT, "§fArrival set to X: %d, Z: %d", clickX, clickZ));
+                            String.format(Locale.ROOT, "§fArrival set to X: %d, Z: %d (elev: %d)", clickX, clickZ, elevation));
                 } else {
                     FlightAssistantCompat.sendChatMessage(
                             "§cFailed to set arrival — check logs.");
                 }
             }
         });
+    }
+
+    /**
+     * Returns the absolute MC world Y coordinate of the terrain surface at the
+     * given block X/Z, using the {@code MOTION_BLOCKING_NO_LEAVES} heightmap.
+     * Returns 0 when the chunk is not loaded; callers treat 0 as "not set" and
+     * fall back to other height sources at render time.
+     */
+    private static int terrainElevation(int x, int z) {
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.level == null) return 0;
+        return mc.level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, x, z);
     }
 }
 

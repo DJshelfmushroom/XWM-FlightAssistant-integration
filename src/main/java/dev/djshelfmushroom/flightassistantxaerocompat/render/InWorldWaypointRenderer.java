@@ -46,8 +46,9 @@ import java.util.Map;
  * <h3>Visual elements (per waypoint)</h3>
  * <ul>
  *   <li>A wire-frame box outline at the waypoint's target altitude (or airport
- *       elevation for departure/arrival; terrain surface height when elevation
- *       is zero / the chunk is unloaded).</li>
+ *       elevation for departure/arrival — stored as absolute MC world Y by FA;
+ *       terrain surface height is used when elevation is zero / the chunk is
+ *       unloaded).</li>
  *   <li>A billboard text label floating above the box showing the waypoint
  *       identifier, target altitude (enroute only), and the horizontal
  *       distance from the player.</li>
@@ -165,7 +166,7 @@ public class InWorldWaypointRenderer {
                 Integer wz = FlightAssistantCompat.getPlanCoordinatesZ(departure);
                 Integer elv = FlightAssistantCompat.getPlanElevation(departure);
                 if (wx != null && wz != null) {
-                    // Use stored airport elevation when set (> 0); otherwise fall back to terrain surface
+                    // elevation is absolute MC world Y; 0 means "not set" (FA default sentinel).
                     double wy = (elv != null && elv > 0) ? elv : surfaceY(mc.level, wx, wz, camPos.y);
                     renderWaypoint(poseStack, camera, camPos, wx, wy, wz, "DEP", COLOR_DEPARTURE);
                 }
@@ -190,7 +191,7 @@ public class InWorldWaypointRenderer {
                 Integer wz = FlightAssistantCompat.getPlanCoordinatesZ(arrival);
                 Integer elv = FlightAssistantCompat.getPlanElevation(arrival);
                 if (wx != null && wz != null) {
-                    // Use stored airport elevation when set (> 0); otherwise fall back to terrain surface
+                    // elevation is absolute MC world Y; 0 means "not set" (FA default sentinel).
                     double wy = (elv != null && elv > 0) ? elv : surfaceY(mc.level, wx, wz, camPos.y);
                     renderWaypoint(poseStack, camera, camPos, wx, wy, wz, "ARR", COLOR_ARRIVAL);
                 }

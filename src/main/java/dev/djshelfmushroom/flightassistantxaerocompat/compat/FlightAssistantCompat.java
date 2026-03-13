@@ -424,8 +424,13 @@ public class FlightAssistantCompat {
      * <p>Verified against FA 3.0.1: {@code DepartureData.elevation: Int} and
      * {@code ArrivalData.elevation: Int} → JVM getter {@code getElevation()}.</p>
      *
+     * <p><b>Coordinate note:</b> FA stores elevation as an <em>absolute MC world
+     * Y coordinate</em> (same as the block Y in the world), not as a height above
+     * sea level or height above terrain.  The value 0 is used as the
+     * "not set / default" sentinel by FA's own data classes.</p>
+     *
      * @param planData a {@code DepartureData} or {@code ArrivalData} instance
-     * @return the stored elevation, or {@code null} if not available
+     * @return the stored elevation (absolute world Y), or {@code null} if not available
      */
     public static Integer getPlanElevation(Object planData) {
         if (planData == null) return null;
@@ -586,20 +591,25 @@ public class FlightAssistantCompat {
     /**
      * Sets the flight plan departure waypoint to the given X/Z map coordinate.
      *
-     * <p>Creates a {@code DepartureData(coordinatesX, coordinatesZ, elevation=0,
-     * takeoffThrust=0)} instance and stores it on the {@code FlightPlanComputer}.
-     * The elevation and takeoffThrust defaults are suitable for most use-cases;
-     * the player can refine them through FA's own FMS screen later.</p>
+     * <p>Creates a {@code DepartureData(coordinatesX, coordinatesZ, elevation,
+     * takeoffThrust=1.0)} instance and stores it on the {@code FlightPlanComputer}.
+     * The player can refine values through FA's own FMS screen later.</p>
+     *
+     * <p>{@code elevation} is the absolute MC world Y coordinate of the runway
+     * surface (not terrain-relative, not sea-level-relative).  Passing 0 signals
+     * "not set"; the in-world renderer will then fall back to the terrain surface
+     * height at that location.</p>
      *
      * <p>Verified against FA 3.0.1: {@code FlightPlanComputer.departureData} is a
      * Kotlin {@code var} property → JVM setter {@code setDepartureData(DepartureData)}.
      * {@code DepartureData} primary constructor: {@code (Int, Int, Int, Float)}.</p>
      *
-     * @param x world X coordinate (converted to int)
-     * @param z world Z coordinate (converted to int)
+     * @param x         world X coordinate (converted to int)
+     * @param z         world Z coordinate (converted to int)
+     * @param elevation absolute MC world Y of the runway surface, or 0 if unknown
      * @return {@code true} if the departure was set successfully
      */
-    public static boolean setDepartureWaypoint(double x, double z) {
+    public static boolean setDepartureWaypoint(double x, double z, int elevation) {
         Object plan = getFlightPlanComputer();
         if (plan == null) {
             LOGGER.warn("[FACompat] setDepartureWaypoint: FlightPlanComputer not available");
@@ -607,11 +617,12 @@ public class FlightAssistantCompat {
         }
         try {
             // Verified against FA 3.0.1: DepartureData(coordinatesX: Int, coordinatesZ: Int,
-            //   elevation: Int, takeoffThrust: Float) — primary constructor
+            //   elevation: Int, takeoffThrust: Float) — primary constructor.
+            // elevation is absolute MC world Y; takeoffThrust 1.0f = full power for takeoff.
             Class<?> depClass = Class.forName(CLASS_DEPARTURE_DATA);
             Object depData = depClass
                     .getDeclaredConstructor(int.class, int.class, int.class, float.class)
-                    .newInstance((int) x, (int) z, 0, 0.0f);
+                    .newInstance((int) x, (int) z, elevation, 1.0f /* takeoffThrust: 100% power */);
 
             // Verified against FA 3.0.1: Kotlin var departureData → setDepartureData(DepartureData)
             Method setter = findMethodByName(plan.getClass(), "setDepartureData");
@@ -625,13 +636,13 @@ public class FlightAssistantCompat {
             clearSelectedLateralMode();
             return true;
         } catch (NoSuchMethodException ex) {
-            // Fallback: use Kotlin synthetic constructor (mask value 12, bits 2-3 → defaults for elevation & thrust)
+            // Fallback: use Kotlin synthetic constructor — pass all params explicitly (mask=0)
             try {
                 Class<?> depClass = Class.forName(CLASS_DEPARTURE_DATA);
                 Class<?> marker = Class.forName("kotlin.jvm.internal.DefaultConstructorMarker");
                 Object depData = depClass
                         .getDeclaredConstructor(int.class, int.class, int.class, float.class, int.class, marker)
-                        .newInstance((int) x, (int) z, 0, 0.0f, 12 /* bits 2-3: defaults for elevation & takeoffThrust */, null);
+                        .newInstance((int) x, (int) z, elevation, 1.0f /* takeoffThrust: 100% power */, 0 /* mask=0: all params explicit */, null);
                 Method setter = findMethodByName(plan.getClass(), "setDepartureData");
                 if (setter == null) {
                     LOGGER.warn("[FACompat] setDepartureData (fallback) not found");
@@ -655,22 +666,28 @@ public class FlightAssistantCompat {
     /**
      * Sets the flight plan arrival waypoint to the given X/Z map coordinate.
      *
-     * <p>Creates an {@code ArrivalData(coordinatesX, coordinatesZ)} instance
-     * (elevation, landingThrust, minimums, minimumsType, goAroundAltitude, and
-     * approachReEntryWaypointIndex are left at their FA defaults) and stores it
-     * on the {@code FlightPlanComputer}.  The player can refine them through
-     * FA's own FMS screen.</p>
+     * <p>Creates an {@code ArrivalData(coordinatesX, coordinatesZ, elevation,
+     * landingThrust=0.3)} instance and stores it on the {@code FlightPlanComputer}.
+     * The remaining fields (minimums, minimumsType, goAroundAltitude,
+     * approachReEntryWaypointIndex) are left at their FA defaults.
+     * The player can refine them through FA's own FMS screen.</p>
+     *
+     * <p>{@code elevation} is the absolute MC world Y coordinate of the runway
+     * surface (not terrain-relative, not sea-level-relative).  Passing 0 signals
+     * "not set"; the in-world renderer will then fall back to the terrain surface
+     * height at that location.</p>
      *
      * <p>Verified against FA 3.0.1: {@code FlightPlanComputer.arrivalData} is a
      * Kotlin {@code var} property → JVM setter {@code setArrivalData(ArrivalData)}.
      * {@code ArrivalData} primary constructor:
      * {@code (Int, Int, Int, Float, Int, MinimumsType, Int, Int)}.</p>
      *
-     * @param x world X coordinate (converted to int)
-     * @param z world Z coordinate (converted to int)
+     * @param x         world X coordinate (converted to int)
+     * @param z         world Z coordinate (converted to int)
+     * @param elevation absolute MC world Y of the runway surface, or 0 if unknown
      * @return {@code true} if the arrival was set successfully
      */
-    public static boolean setArrivalWaypoint(double x, double z) {
+    public static boolean setArrivalWaypoint(double x, double z, int elevation) {
         Object plan = getFlightPlanComputer();
         if (plan == null) {
             LOGGER.warn("[FACompat] setArrivalWaypoint: FlightPlanComputer not available");
@@ -680,6 +697,7 @@ public class FlightAssistantCompat {
             // Verified against FA 3.0.1: ArrivalData(coordinatesX: Int, coordinatesZ: Int,
             //   elevation: Int, landingThrust: Float, minimums: Int,
             //   minimumsType: MinimumsType, goAroundAltitude: Int, approachReEntryWaypointIndex: Int)
+            // elevation is absolute MC world Y; landingThrust 0.3f = 30% approach power.
             Class<?> arrClass    = Class.forName(CLASS_ARRIVAL_DATA);
             Class<?> minTypeClass = Class.forName(CLASS_MINIMUMS_TYPE);
             Object absoluteConst = getEnumConstant(minTypeClass, "ABSOLUTE");
@@ -687,7 +705,7 @@ public class FlightAssistantCompat {
             Object arrData = arrClass
                     .getDeclaredConstructor(int.class, int.class, int.class, float.class,
                             int.class, minTypeClass, int.class, int.class)
-                    .newInstance((int) x, (int) z, 0, 0.0f, 0, absoluteConst, 0, 0);
+                    .newInstance((int) x, (int) z, elevation, 0.3f /* landingThrust: 30% approach power */, 0, absoluteConst, 0, 0);
 
             // Verified against FA 3.0.1: Kotlin var arrivalData → setArrivalData(ArrivalData)
             Method setter = findMethodByName(plan.getClass(), "setArrivalData");
@@ -701,8 +719,9 @@ public class FlightAssistantCompat {
             clearSelectedLateralMode();
             return true;
         } catch (NoSuchMethodException ex) {
-            // Fallback: use Kotlin synthetic constructor (mask value 252, bits 2-7 → defaults for everything
-            // after coordinatesX/coordinatesZ)
+            // Fallback: use Kotlin synthetic constructor.
+            // Bits 4-7 (mask=240) → defaults for minimums/minimumsType/goAroundAlt/approachReEntry;
+            // elevation (bit 2) and landingThrust (bit 3) are passed explicitly.
             try {
                 Class<?> arrClass    = Class.forName(CLASS_ARRIVAL_DATA);
                 Class<?> minTypeClass = Class.forName(CLASS_MINIMUMS_TYPE);
@@ -710,7 +729,8 @@ public class FlightAssistantCompat {
                 Object arrData = arrClass
                         .getDeclaredConstructor(int.class, int.class, int.class, float.class,
                                 int.class, minTypeClass, int.class, int.class, int.class, marker)
-                        .newInstance((int) x, (int) z, 0, 0.0f, 0, null, 0, 0, 252 /* bits 2-7: defaults for all params after coordinatesX/Z */, null);
+                        .newInstance((int) x, (int) z, elevation, 0.3f /* landingThrust: 30% approach power */, 0, null, 0, 0,
+                                240 /* bits 4-7: defaults for minimums/minimumsType/goAroundAlt/approachReEntry */, null);
                 Method setter = findMethodByName(plan.getClass(), "setArrivalData");
                 if (setter == null) {
                     LOGGER.warn("[FACompat] setArrivalData (fallback) not found");

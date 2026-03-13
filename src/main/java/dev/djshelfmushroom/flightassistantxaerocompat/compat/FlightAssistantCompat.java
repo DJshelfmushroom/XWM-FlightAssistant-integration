@@ -418,6 +418,30 @@ public class FlightAssistantCompat {
     }
 
     /**
+     * Reads the airport elevation of a {@code DepartureData} or
+     * {@code ArrivalData} object.
+     *
+     * <p>Verified against FA 3.0.1: {@code DepartureData.elevation: Int} and
+     * {@code ArrivalData.elevation: Int} → JVM getter {@code getElevation()}.</p>
+     *
+     * @param planData a {@code DepartureData} or {@code ArrivalData} instance
+     * @return the stored elevation, or {@code null} if not available
+     */
+    public static Integer getPlanElevation(Object planData) {
+        if (planData == null) return null;
+        try {
+            Method m = planData.getClass().getMethod("getElevation");
+            Object v = m.invoke(planData);
+            if (v instanceof Number) return ((Number) v).intValue();
+        } catch (NoSuchMethodException e) {
+            // Method absent — silently return null (no WARN to avoid per-frame spam)
+        } catch (Exception e) {
+            LOGGER.warn("[FACompat] getPlanElevation failed: {}", e.getMessage());
+        }
+        return null;
+    }
+
+    /**
      * Returns the index of the active (TARGET) enroute waypoint, or {@code -1}.
      *
      * <p>Verified against FA 3.0.1: {@code EnrouteWaypoint.active: Active?}

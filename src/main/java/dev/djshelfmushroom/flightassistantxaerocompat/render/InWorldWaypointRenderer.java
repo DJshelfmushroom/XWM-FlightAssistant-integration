@@ -45,10 +45,9 @@ import java.util.Map;
  *
  * <h3>Visual elements (per waypoint)</h3>
  * <ul>
- *   <li>A wire-frame box outline at the waypoint's target altitude (or cached
- *       terrain surface height at the waypoint X/Z for departure/arrival which
- *       have no explicit flight altitude; the height is queried once when the
- *       chunk is loaded and cached for all subsequent frames).</li>
+ *   <li>A wire-frame box outline at the waypoint's target altitude (or airport
+ *       elevation for departure/arrival; terrain surface height when elevation
+ *       is zero / the chunk is unloaded).</li>
  *   <li>A billboard text label floating above the box showing the waypoint
  *       identifier, target altitude (enroute only), and the horizontal
  *       distance from the player.</li>
@@ -164,10 +163,11 @@ public class InWorldWaypointRenderer {
             if (hasDep) {
                 Integer wx = FlightAssistantCompat.getPlanCoordinatesX(departure);
                 Integer wz = FlightAssistantCompat.getPlanCoordinatesZ(departure);
-                // DepartureData has no flight altitude — use terrain surface height as world-fixed fallback
+                Integer elv = FlightAssistantCompat.getPlanElevation(departure);
                 if (wx != null && wz != null) {
-                    renderWaypoint(poseStack, camera, camPos, wx, surfaceY(mc.level, wx, wz, camPos.y), wz,
-                            "DEP", COLOR_DEPARTURE);
+                    // Use stored airport elevation when set (> 0); otherwise fall back to terrain surface
+                    double wy = (elv != null && elv > 0) ? elv : surfaceY(mc.level, wx, wz, camPos.y);
+                    renderWaypoint(poseStack, camera, camPos, wx, wy, wz, "DEP", COLOR_DEPARTURE);
                 }
             }
 
@@ -188,10 +188,11 @@ public class InWorldWaypointRenderer {
             if (hasArr) {
                 Integer wx = FlightAssistantCompat.getPlanCoordinatesX(arrival);
                 Integer wz = FlightAssistantCompat.getPlanCoordinatesZ(arrival);
-                // ArrivalData has no flight altitude — use terrain surface height as world-fixed fallback
+                Integer elv = FlightAssistantCompat.getPlanElevation(arrival);
                 if (wx != null && wz != null) {
-                    renderWaypoint(poseStack, camera, camPos, wx, surfaceY(mc.level, wx, wz, camPos.y), wz,
-                            "ARR", COLOR_ARRIVAL);
+                    // Use stored airport elevation when set (> 0); otherwise fall back to terrain surface
+                    double wy = (elv != null && elv > 0) ? elv : surfaceY(mc.level, wx, wz, camPos.y);
+                    renderWaypoint(poseStack, camera, camPos, wx, wy, wz, "ARR", COLOR_ARRIVAL);
                 }
             }
 

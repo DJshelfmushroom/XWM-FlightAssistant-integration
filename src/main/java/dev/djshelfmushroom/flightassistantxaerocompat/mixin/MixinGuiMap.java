@@ -18,13 +18,15 @@ import java.util.ArrayList;
  * Mixin on {@code xaero.map.gui.GuiMap} to inject FlightAssistant context-menu
  * entries into Xaero's World Map right-click dropdown.
  *
- * <p>Three entries are added whenever FlightAssistant is loaded:</p>
+ * <p>Five entries are added whenever FlightAssistant is loaded:</p>
  * <ol>
  *   <li><b>Fly Here (FlightAssistant)</b> — sets COORDS target to the right-clicked
  *       X/Z position.</li>
  *   <li><b>[FA] Set as COORDS Target</b> — same action in the FA section.</li>
  *   <li><b>[FA] Add to Flight Plan (Enroute)</b> — opens
  *       {@link WaypointAltitudeScreen}.</li>
+ *   <li><b>[FA] Set as Departure</b> — sets the flight plan departure point.</li>
+ *   <li><b>[FA] Set as Arrival</b> — sets the flight plan arrival point.</li>
  * </ol>
  *
  * <p>All coordinates come from the Xaero-managed {@code rightClickX}/{@code rightClickZ}
@@ -116,6 +118,36 @@ public abstract class MixinGuiMap {
                 Minecraft mc = Minecraft.getInstance();
                 mc.setScreen(new WaypointAltitudeScreen(
                         clickX, clickZ, "X:" + clickX + " Z:" + clickZ));
+            }
+        });
+
+        // ---- "[FA] Set as Departure" ----
+        options.add(new RightClickOption("[FA] Set as Departure", options.size(), self) {
+            @Override
+            public void onAction(Screen screen) {
+                boolean ok = FlightAssistantCompat.setDepartureWaypoint(clickX, clickZ);
+                if (ok) {
+                    FlightAssistantCompat.sendChatMessage(
+                            String.format("§fDeparture set to X: %d, Z: %d", clickX, clickZ));
+                } else {
+                    FlightAssistantCompat.sendChatMessage(
+                            "§cFailed to set departure — check logs.");
+                }
+            }
+        });
+
+        // ---- "[FA] Set as Arrival" ----
+        options.add(new RightClickOption("[FA] Set as Arrival", options.size(), self) {
+            @Override
+            public void onAction(Screen screen) {
+                boolean ok = FlightAssistantCompat.setArrivalWaypoint(clickX, clickZ);
+                if (ok) {
+                    FlightAssistantCompat.sendChatMessage(
+                            String.format("§fArrival set to X: %d, Z: %d", clickX, clickZ));
+                } else {
+                    FlightAssistantCompat.sendChatMessage(
+                            "§cFailed to set arrival — check logs.");
+                }
             }
         });
     }

@@ -80,6 +80,30 @@ public class FlightAssistantCompat {
     private static final String CLASS_ENROUTE_ACTIVE =
             "ru.octol1ttle.flightassistant.impl.computer.autoflight.FlightPlanComputer$EnrouteWaypoint$Active";
 
+    /**
+     * Departure airport data — {@code data class DepartureData(coordinatesX, coordinatesZ,
+     * elevation, takeoffThrust)}.
+     * <p>Verified against FA 3.0.1: FlightPlanComputer.kt nested data class.</p>
+     */
+    private static final String CLASS_DEPARTURE_DATA =
+            "ru.octol1ttle.flightassistant.impl.computer.autoflight.FlightPlanComputer$DepartureData";
+
+    /**
+     * Arrival airport data — {@code data class ArrivalData(coordinatesX, coordinatesZ,
+     * elevation, landingThrust, minimums, minimumsType, goAroundAltitude,
+     * approachReEntryWaypointIndex)}.
+     * <p>Verified against FA 3.0.1: FlightPlanComputer.kt nested data class.</p>
+     */
+    private static final String CLASS_ARRIVAL_DATA =
+            "ru.octol1ttle.flightassistant.impl.computer.autoflight.FlightPlanComputer$ArrivalData";
+
+    /**
+     * MinimumsType enum nested inside {@code ArrivalData}.
+     * <p>Verified against FA 3.0.1: FlightPlanComputer.kt</p>
+     */
+    private static final String CLASS_MINIMUMS_TYPE =
+            "ru.octol1ttle.flightassistant.impl.computer.autoflight.FlightPlanComputer$ArrivalData$MinimumsType";
+
     // ResourceLocation IDs for each computer (verified against FA 3.0.1)
     // AutoFlightComputer.ID = FlightAssistant.id("auto_flight")
     private static final ResourceLocation ID_AUTO_FLIGHT =
@@ -508,6 +532,146 @@ public class FlightAssistantCompat {
             }
         } catch (Exception e) {
             LOGGER.warn("[FACompat] addEnrouteWaypoint failed: {}", e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * Sets the flight plan departure waypoint to the given X/Z map coordinate.
+     *
+     * <p>Creates a {@code DepartureData(coordinatesX, coordinatesZ, elevation=0,
+     * takeoffThrust=0)} instance and stores it on the {@code FlightPlanComputer}.
+     * The elevation and takeoffThrust defaults are suitable for most use-cases;
+     * the player can refine them through FA's own FMS screen later.</p>
+     *
+     * <p>Verified against FA 3.0.1: {@code FlightPlanComputer.departureData} is a
+     * Kotlin {@code var} property → JVM setter {@code setDepartureData(DepartureData)}.
+     * {@code DepartureData} primary constructor: {@code (Int, Int, Int, Float)}.</p>
+     *
+     * @param x world X coordinate (converted to int)
+     * @param z world Z coordinate (converted to int)
+     * @return {@code true} if the departure was set successfully
+     */
+    public static boolean setDepartureWaypoint(double x, double z) {
+        Object plan = getFlightPlanComputer();
+        if (plan == null) {
+            LOGGER.warn("[FACompat] setDepartureWaypoint: FlightPlanComputer not available");
+            return false;
+        }
+        try {
+            // Verified against FA 3.0.1: DepartureData(coordinatesX: Int, coordinatesZ: Int,
+            //   elevation: Int, takeoffThrust: Float) — primary constructor
+            Class<?> depClass = Class.forName(CLASS_DEPARTURE_DATA);
+            Object depData = depClass
+                    .getDeclaredConstructor(int.class, int.class, int.class, float.class)
+                    .newInstance((int) x, (int) z, 0, 0.0f);
+
+            // Verified against FA 3.0.1: Kotlin var departureData → setDepartureData(DepartureData)
+            Method setter = findMethodByName(plan.getClass(), "setDepartureData");
+            if (setter == null) {
+                LOGGER.warn("[FACompat] setDepartureData not found on FlightPlanComputer");
+                return false;
+            }
+            setter.setAccessible(true);
+            setter.invoke(plan, depData);
+            return true;
+        } catch (NoSuchMethodException ex) {
+            // Fallback: use Kotlin synthetic constructor (mask value 12, bits 2-3 → defaults for elevation & thrust)
+            try {
+                Class<?> depClass = Class.forName(CLASS_DEPARTURE_DATA);
+                Class<?> marker = Class.forName("kotlin.jvm.internal.DefaultConstructorMarker");
+                Object depData = depClass
+                        .getDeclaredConstructor(int.class, int.class, int.class, float.class, int.class, marker)
+                        .newInstance((int) x, (int) z, 0, 0.0f, 12, null);
+                Method setter = findMethodByName(plan.getClass(), "setDepartureData");
+                if (setter == null) {
+                    LOGGER.warn("[FACompat] setDepartureData (fallback) not found");
+                    return false;
+                }
+                setter.setAccessible(true);
+                setter.invoke(plan, depData);
+                return true;
+            } catch (Exception e2) {
+                LOGGER.warn("[FACompat] setDepartureWaypoint (fallback) failed: {}", e2.getMessage());
+                return false;
+            }
+        } catch (Exception e) {
+            LOGGER.warn("[FACompat] setDepartureWaypoint failed: {}", e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * Sets the flight plan arrival waypoint to the given X/Z map coordinate.
+     *
+     * <p>Creates an {@code ArrivalData(coordinatesX, coordinatesZ)} instance
+     * (elevation, landingThrust, minimums, minimumsType, goAroundAltitude, and
+     * approachReEntryWaypointIndex are left at their FA defaults) and stores it
+     * on the {@code FlightPlanComputer}.  The player can refine them through
+     * FA's own FMS screen.</p>
+     *
+     * <p>Verified against FA 3.0.1: {@code FlightPlanComputer.arrivalData} is a
+     * Kotlin {@code var} property → JVM setter {@code setArrivalData(ArrivalData)}.
+     * {@code ArrivalData} primary constructor:
+     * {@code (Int, Int, Int, Float, Int, MinimumsType, Int, Int)}.</p>
+     *
+     * @param x world X coordinate (converted to int)
+     * @param z world Z coordinate (converted to int)
+     * @return {@code true} if the arrival was set successfully
+     */
+    public static boolean setArrivalWaypoint(double x, double z) {
+        Object plan = getFlightPlanComputer();
+        if (plan == null) {
+            LOGGER.warn("[FACompat] setArrivalWaypoint: FlightPlanComputer not available");
+            return false;
+        }
+        try {
+            // Verified against FA 3.0.1: ArrivalData(coordinatesX: Int, coordinatesZ: Int,
+            //   elevation: Int, landingThrust: Float, minimums: Int,
+            //   minimumsType: MinimumsType, goAroundAltitude: Int, approachReEntryWaypointIndex: Int)
+            Class<?> arrClass    = Class.forName(CLASS_ARRIVAL_DATA);
+            Class<?> minTypeClass = Class.forName(CLASS_MINIMUMS_TYPE);
+            Object absoluteConst = getEnumConstant(minTypeClass, "ABSOLUTE");
+
+            Object arrData = arrClass
+                    .getDeclaredConstructor(int.class, int.class, int.class, float.class,
+                            int.class, minTypeClass, int.class, int.class)
+                    .newInstance((int) x, (int) z, 0, 0.0f, 0, absoluteConst, 0, 0);
+
+            // Verified against FA 3.0.1: Kotlin var arrivalData → setArrivalData(ArrivalData)
+            Method setter = findMethodByName(plan.getClass(), "setArrivalData");
+            if (setter == null) {
+                LOGGER.warn("[FACompat] setArrivalData not found on FlightPlanComputer");
+                return false;
+            }
+            setter.setAccessible(true);
+            setter.invoke(plan, arrData);
+            return true;
+        } catch (NoSuchMethodException ex) {
+            // Fallback: use Kotlin synthetic constructor (mask value 252, bits 2-7 → defaults for everything
+            // after coordinatesX/coordinatesZ)
+            try {
+                Class<?> arrClass    = Class.forName(CLASS_ARRIVAL_DATA);
+                Class<?> minTypeClass = Class.forName(CLASS_MINIMUMS_TYPE);
+                Class<?> marker      = Class.forName("kotlin.jvm.internal.DefaultConstructorMarker");
+                Object arrData = arrClass
+                        .getDeclaredConstructor(int.class, int.class, int.class, float.class,
+                                int.class, minTypeClass, int.class, int.class, int.class, marker)
+                        .newInstance((int) x, (int) z, 0, 0.0f, 0, null, 0, 0, 252, null);
+                Method setter = findMethodByName(plan.getClass(), "setArrivalData");
+                if (setter == null) {
+                    LOGGER.warn("[FACompat] setArrivalData (fallback) not found");
+                    return false;
+                }
+                setter.setAccessible(true);
+                setter.invoke(plan, arrData);
+                return true;
+            } catch (Exception e2) {
+                LOGGER.warn("[FACompat] setArrivalWaypoint (fallback) failed: {}", e2.getMessage());
+                return false;
+            }
+        } catch (Exception e) {
+            LOGGER.warn("[FACompat] setArrivalWaypoint failed: {}", e.getMessage());
             return false;
         }
     }

@@ -13,8 +13,10 @@ import net.minecraft.world.phys.Vec3;
 import net.minecraftforge.client.event.RenderLevelStageEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import org.joml.Matrix4f;
+import org.joml.Quaternionf;
 
 import java.util.List;
+import java.util.Locale;
 
 /**
  * Renders FlightAssistant flight-plan waypoints as 3D in-world markers while
@@ -25,10 +27,19 @@ import java.util.List;
  * on top of most world geometry but beneath the HUD. Markers are rendered
  * without depth-testing so they remain visible through terrain.</p>
  *
+ * <h3>Coordinate-space note</h3>
+ * <p>The {@code poseStack} supplied by {@link RenderLevelStageEvent} already has
+ * the camera's pitch/yaw rotation baked in by {@code GameRenderer.renderLevel()}.
+ * Without correction, translating by {@code (wx − camX, wy − camY, wz − camZ)}
+ * moves in camera-local space and makes waypoints orbit the camera as the player
+ * looks around. We undo the rotation once at the top of the event handler (via
+ * the quaternion conjugate), then translate in world-aligned space; billboard
+ * labels re-apply the rotation individually.</p>
+ *
  * <h3>Visual elements (per waypoint)</h3>
  * <ul>
  *   <li>A wire-frame box outline at the waypoint's target altitude (or camera
- *       altitude for departure/arrival which have no explicit altitude).</li>
+ *       altitude for departure/arrival which have no explicit flight altitude).</li>
  *   <li>A billboard text label floating above the box showing the waypoint
  *       identifier, target altitude (enroute only), and the horizontal
  *       distance from the player.</li>
@@ -58,6 +69,13 @@ public class InWorldWaypointRenderer {
     private static final int COLOR_ACTIVE    = 0xFFFFFF00;
     private static final int COLOR_ARRIVAL   = 0xFFBB0000;
 
+    /**
+     * Shared label BufferSource — allocated once and reused every frame to
+     * avoid per-frame GC pressure while a flight plan is active.
+     */
+    private final MultiBufferSource.BufferSource labelBuf =
+            MultiBufferSource.immediate(new BufferBuilder(1536));
+
     // =========================================================================
     // Event handler
     // =========================================================================
@@ -75,10 +93,10 @@ public class InWorldWaypointRenderer {
         Minecraft mc = Minecraft.getInstance();
         if (mc.level == null || mc.player == null) return;
 
-        Object departure  = FlightAssistantCompat.getDepartureData();
-        Object arrival    = FlightAssistantCompat.getArrivalData();
+        Object departure     = FlightAssistantCompat.getDepartureData();
+        Object arrival       = FlightAssistantCompat.getArrivalData();
         List<Object> enroute = FlightAssistantCompat.getEnrouteWaypoints();
-        int activeIdx     = FlightAssistantCompat.getActiveWaypointIndex();
+        int activeIdx        = FlightAssistantCompat.getActiveWaypointIndex();
 
         boolean hasDep = departure != null && !FlightAssistantCompat.isPlanDataDefault(departure);
         boolean hasArr = arrival   != null && !FlightAssistantCompat.isPlanDataDefault(arrival);
@@ -90,46 +108,45 @@ public class InWorldWaypointRenderer {
         Camera camera       = event.getCamera();
         Vec3 camPos         = camera.getPosition();
 
-        // Shared BufferSource for all label renders this frame — avoids
-        // allocating a new BufferBuilder per waypoint.
-        MultiBufferSource.BufferSource labelBuf =
-                MultiBufferSource.immediate(new BufferBuilder(256));
+        // The RenderLevelStageEvent pose stack has the camera rotation baked in
+        // by GameRenderer (it applies pitch + yaw before calling LevelRenderer).
+        // Undo that rotation so subsequent translations are in world-aligned space,
+        // not camera-local space. Billboard labels re-apply it individually.
+        poseStack.pushPose();
+        poseStack.mulPose(new Quaternionf(camera.rotation()).conjugate());
 
         try {
             if (hasDep) {
                 Integer wx = FlightAssistantCompat.getPlanCoordinatesX(departure);
                 Integer wz = FlightAssistantCompat.getPlanCoordinatesZ(departure);
-                // Departure may have an altitude; fall back to camera Y if not
-                Integer alt = FlightAssistantCompat.getEnrouteAltitude(departure);
+                // DepartureData has no flight altitude — use camera Y as fallback
                 if (wx != null && wz != null) {
-                    double wy = alt != null ? alt : camPos.y;
-                    renderWaypoint(poseStack, camera, camPos, wx, wy, wz,
-                            "DEP", COLOR_DEPARTURE, labelBuf);
+                    renderWaypoint(poseStack, camera, camPos, wx, camPos.y, wz,
+                            "DEP", COLOR_DEPARTURE);
                 }
             }
 
             if (hasEnr) {
                 for (int i = 0; i < enroute.size(); i++) {
-                    Object wp  = enroute.get(i);
+                    Object wp   = enroute.get(i);
                     Integer wx  = FlightAssistantCompat.getPlanCoordinatesX(wp);
                     Integer wz  = FlightAssistantCompat.getPlanCoordinatesZ(wp);
                     Integer alt = FlightAssistantCompat.getEnrouteAltitude(wp);
                     if (wx == null || wz == null) continue;
-                    double wy = alt != null ? alt : camPos.y;
-                    int color = (i == activeIdx) ? COLOR_ACTIVE : COLOR_ENROUTE;
+                    double wy   = alt != null ? alt : camPos.y;
+                    int color   = (i == activeIdx) ? COLOR_ACTIVE : COLOR_ENROUTE;
                     String label = "WP" + (i + 1) + (alt != null ? "/" + alt : "");
-                    renderWaypoint(poseStack, camera, camPos, wx, wy, wz, label, color, labelBuf);
+                    renderWaypoint(poseStack, camera, camPos, wx, wy, wz, label, color);
                 }
             }
 
             if (hasArr) {
                 Integer wx = FlightAssistantCompat.getPlanCoordinatesX(arrival);
                 Integer wz = FlightAssistantCompat.getPlanCoordinatesZ(arrival);
-                Integer alt = FlightAssistantCompat.getEnrouteAltitude(arrival);
+                // ArrivalData has no flight altitude — use camera Y as fallback
                 if (wx != null && wz != null) {
-                    double wy = alt != null ? alt : camPos.y;
-                    renderWaypoint(poseStack, camera, camPos, wx, wy, wz,
-                            "ARR", COLOR_ARRIVAL, labelBuf);
+                    renderWaypoint(poseStack, camera, camPos, wx, camPos.y, wz,
+                            "ARR", COLOR_ARRIVAL);
                 }
             }
 
@@ -137,6 +154,8 @@ public class InWorldWaypointRenderer {
         } catch (Exception e) {
             FlightAssistantXaeroCompat.LOGGER.warn(
                     "[FA-Xaero] InWorldWaypointRenderer failed", e);
+        } finally {
+            poseStack.popPose();
         }
     }
 
@@ -146,8 +165,10 @@ public class InWorldWaypointRenderer {
 
     /**
      * Renders the box and label for a single waypoint.
+     * The poseStack must already have the camera rotation undone (i.e. be in
+     * world-aligned space) when this method is called.
      *
-     * @param poseStack current level render pose stack
+     * @param poseStack camera-rotation-undone pose stack
      * @param camera    active camera (for billboard orientation)
      * @param camPos    camera world position
      * @param wx        waypoint world X
@@ -155,12 +176,10 @@ public class InWorldWaypointRenderer {
      * @param wz        waypoint world Z
      * @param label     text to display (e.g. "WP1/250")
      * @param argbColor 0xAARRGGBB colour for this waypoint type
-     * @param labelBuf  shared buffer source for text rendering
      */
-    private static void renderWaypoint(PoseStack poseStack, Camera camera, Vec3 camPos,
-                                        int wx, double wy, int wz,
-                                        String label, int argbColor,
-                                        MultiBufferSource.BufferSource labelBuf) {
+    private void renderWaypoint(PoseStack poseStack, Camera camera, Vec3 camPos,
+                                int wx, double wy, int wz,
+                                String label, int argbColor) {
         double relX = wx - camPos.x;
         double relY = wy - camPos.y;
         double relZ = wz - camPos.z;
@@ -182,7 +201,7 @@ public class InWorldWaypointRenderer {
         // Draw billboard label above the box
         double horizDist = Math.sqrt(horizDistSq);
         String fullLabel = label + "  " + formatDist(horizDist);
-        drawLabel(poseStack, camera, relX, relY + BOX_HALF + 0.6, relZ, fullLabel, argbColor, labelBuf);
+        drawLabel(poseStack, camera, relX, relY + BOX_HALF + 0.6, relZ, fullLabel, argbColor);
     }
 
     // =========================================================================
@@ -232,32 +251,34 @@ public class InWorldWaypointRenderer {
         tes.end();
         RenderSystem.enableDepthTest();
         RenderSystem.disableBlend();
+        RenderSystem.lineWidth(1.0f);
     }
 
     /**
      * Draws a camera-facing (billboard) text label at the given camera-relative
-     * position.
+     * position. Assumes the poseStack is already in world-aligned space (camera
+     * rotation undone); re-applies camera rotation for the billboard effect.
      *
-     * @param poseStack pose stack (at world-relative-to-camera origin)
+     * @param poseStack world-aligned pose stack
      * @param camera    active camera (used for billboard rotation)
      * @param relX      camera-relative X of the label anchor
      * @param relY      camera-relative Y of the label anchor
      * @param relZ      camera-relative Z of the label anchor
      * @param text      text to render
      * @param argbColor ARGB colour for the text
-     * @param bufSource shared buffer source — caller is responsible for {@code endBatch()}
      */
-    private static void drawLabel(PoseStack poseStack, Camera camera,
-                                   double relX, double relY, double relZ,
-                                   String text, int argbColor,
-                                   MultiBufferSource.BufferSource bufSource) {
+    private void drawLabel(PoseStack poseStack, Camera camera,
+                           double relX, double relY, double relZ,
+                           String text, int argbColor) {
         Minecraft mc = Minecraft.getInstance();
         Font font = mc.font;
 
         poseStack.pushPose();
         poseStack.translate(relX, relY, relZ);
 
-        // Rotate so the label faces the camera (billboard)
+        // Re-apply camera rotation so the label faces the camera (billboard).
+        // The caller has already undone camera rotation to reach world-aligned space;
+        // applying it here rotates the label's local axes to match the screen.
         poseStack.mulPose(camera.rotation());
 
         // Scale to a readable world-space size
@@ -274,7 +295,7 @@ public class InWorldWaypointRenderer {
                 textColor,
                 false,
                 poseStack.last().pose(),
-                bufSource,
+                labelBuf,
                 Font.DisplayMode.SEE_THROUGH,
                 0x55000000, // semi-transparent dark background
                 0xF000F0    // full-bright packed light
@@ -298,8 +319,8 @@ public class InWorldWaypointRenderer {
     /** Formats a horizontal block distance as a compact string (e.g. "512m" or "1.5km"). */
     private static String formatDist(double dist) {
         if (dist >= 1000.0) {
-            return String.format("%.1fkm", dist / 1000.0);
+            return String.format(Locale.ROOT, "%.1fkm", dist / 1000.0);
         }
-        return String.format("%.0fm", dist);
+        return String.format(Locale.ROOT, "%.0fm", dist);
     }
 }

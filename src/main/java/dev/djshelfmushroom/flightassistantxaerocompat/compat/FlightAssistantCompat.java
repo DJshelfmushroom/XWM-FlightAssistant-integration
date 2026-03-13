@@ -582,7 +582,7 @@ public class FlightAssistantCompat {
                 Class<?> marker = Class.forName("kotlin.jvm.internal.DefaultConstructorMarker");
                 Object depData = depClass
                         .getDeclaredConstructor(int.class, int.class, int.class, float.class, int.class, marker)
-                        .newInstance((int) x, (int) z, 0, 0.0f, 12, null);
+                        .newInstance((int) x, (int) z, 0, 0.0f, 12 /* bits 2-3: defaults for elevation & takeoffThrust */, null);
                 Method setter = findMethodByName(plan.getClass(), "setDepartureData");
                 if (setter == null) {
                     LOGGER.warn("[FACompat] setDepartureData (fallback) not found");
@@ -657,7 +657,7 @@ public class FlightAssistantCompat {
                 Object arrData = arrClass
                         .getDeclaredConstructor(int.class, int.class, int.class, float.class,
                                 int.class, minTypeClass, int.class, int.class, int.class, marker)
-                        .newInstance((int) x, (int) z, 0, 0.0f, 0, null, 0, 0, 252, null);
+                        .newInstance((int) x, (int) z, 0, 0.0f, 0, null, 0, 0, 252 /* bits 2-7: defaults for all params after coordinatesX/Z */, null);
                 Method setter = findMethodByName(plan.getClass(), "setArrivalData");
                 if (setter == null) {
                     LOGGER.warn("[FACompat] setArrivalData (fallback) not found");

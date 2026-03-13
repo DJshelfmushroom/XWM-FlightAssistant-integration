@@ -13,6 +13,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 import xaero.map.gui.dropdown.rightclick.RightClickOption;
 
 import java.util.ArrayList;
+import java.util.Locale;
 
 /**
  * Mixin on {@code xaero.map.gui.GuiMap} to inject FlightAssistant context-menu
@@ -128,7 +129,7 @@ public abstract class MixinGuiMap {
                 boolean ok = FlightAssistantCompat.setDepartureWaypoint(clickX, clickZ);
                 if (ok) {
                     FlightAssistantCompat.sendChatMessage(
-                            String.format("§fDeparture set to X: %d, Z: %d", clickX, clickZ));
+                            String.format(Locale.ROOT, "§fDeparture set to X: %d, Z: %d", clickX, clickZ));
                 } else {
                     FlightAssistantCompat.sendChatMessage(
                             "§cFailed to set departure — check logs.");
@@ -143,7 +144,7 @@ public abstract class MixinGuiMap {
                 boolean ok = FlightAssistantCompat.setArrivalWaypoint(clickX, clickZ);
                 if (ok) {
                     FlightAssistantCompat.sendChatMessage(
-                            String.format("§fArrival set to X: %d, Z: %d", clickX, clickZ));
+                            String.format(Locale.ROOT, "§fArrival set to X: %d, Z: %d", clickX, clickZ));
                 } else {
                     FlightAssistantCompat.sendChatMessage(
                             "§cFailed to set arrival — check logs.");

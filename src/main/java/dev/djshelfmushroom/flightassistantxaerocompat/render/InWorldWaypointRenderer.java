@@ -31,12 +31,15 @@ import java.util.Locale;
  *
  * <h3>Coordinate-space note</h3>
  * <p>The {@code poseStack} supplied by {@link RenderLevelStageEvent} already has
- * the camera's pitch/yaw rotation baked in by {@code GameRenderer.renderLevel()}.
- * Without correction, translating by {@code (wx − camX, wy − camY, wz − camZ)}
- * moves in camera-local space and makes waypoints orbit the camera as the player
- * looks around. We undo the rotation once at the top of the event handler (via
- * the quaternion conjugate), then translate in world-aligned space; billboard
- * labels re-apply the rotation individually.</p>
+ * the camera view transform {@code R(Q⁻¹)} applied by
+ * {@code GameRenderer.renderLevel()} before the level renderer is called.
+ * Translating by {@code (wx − camX, wy − camY, wz − camZ)} in this space
+ * correctly places a vertex at the world-fixed waypoint position: the view
+ * transform then rotates it into camera/screen space as expected.
+ * Applying an additional rotation undo here would double the inverse rotation
+ * to {@code R(Q⁻²)}, making markers drift with camera look direction.
+ * Billboard labels apply {@code camera.rotation()} individually to undo the
+ * view rotation and align their local axes with screen axes.</p>
  *
  * <h3>Visual elements (per waypoint)</h3>
  * <ul>
@@ -129,12 +132,14 @@ public class InWorldWaypointRenderer {
         Camera camera       = event.getCamera();
         Vec3 camPos         = camera.getPosition();
 
-        // The RenderLevelStageEvent pose stack has the camera rotation baked in
-        // by GameRenderer (it applies pitch + yaw before calling LevelRenderer).
-        // Undo that rotation so subsequent translations are in world-aligned space,
-        // not camera-local space. Billboard labels re-apply it individually.
+        // The RenderLevelStageEvent pose stack already has the camera VIEW transform
+        // (R(Q⁻¹)) applied by GameRenderer before LevelRenderer is called.
+        // Translating by (world − camera) in this space gives world-fixed positions.
+        // DO NOT apply an additional rotation here — that would double the inverse
+        // rotation to R(Q⁻²) and make markers drift with camera look direction.
+        // Billboard labels apply camera.rotation() individually to undo the view
+        // transform and face the text toward the camera (screen space axes).
         poseStack.pushPose();
-        poseStack.mulPose(new Quaternionf(camera.rotation()).conjugate());
 
         try {
             if (hasDep) {

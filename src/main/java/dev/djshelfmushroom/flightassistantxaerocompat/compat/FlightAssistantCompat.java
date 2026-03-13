@@ -104,6 +104,25 @@ public class FlightAssistantCompat {
     private static final String CLASS_MINIMUMS_TYPE =
             "ru.octol1ttle.flightassistant.impl.computer.autoflight.FlightPlanComputer$ArrivalData$MinimumsType";
 
+    /**
+     * FA 3.0.1 FMS departure screen — has a companion object with a static {@code state}
+     * field and a {@code reload(DepartureData)} method to sync it with live plan data.
+     */
+    private static final String CLASS_DEPARTURE_SCREEN =
+            "ru.octol1ttle.flightassistant.screen.fms.departure.DepartureScreen";
+
+    /**
+     * FA 3.0.1 FMS arrival screen — companion {@code reload(ArrivalData)}.
+     */
+    private static final String CLASS_ARRIVAL_SCREEN =
+            "ru.octol1ttle.flightassistant.screen.fms.arrival.ArrivalScreen";
+
+    /**
+     * FA 3.0.1 FMS enroute screen — companion {@code reload(List<EnrouteWaypoint>)}.
+     */
+    private static final String CLASS_ENROUTE_SCREEN =
+            "ru.octol1ttle.flightassistant.screen.fms.enroute.EnrouteScreen";
+
     // ResourceLocation IDs for each computer (verified against FA 3.0.1)
     // AutoFlightComputer.ID = FlightAssistant.id("auto_flight")
     private static final ResourceLocation ID_AUTO_FLIGHT =
@@ -497,6 +516,7 @@ public class FlightAssistantCompat {
                     );
 
             waypoints.add(newWaypoint);
+            reloadFMSEnrouteScreen(waypoints);
             return true;
 
         } catch (NoSuchMethodException ex) {
@@ -525,6 +545,7 @@ public class FlightAssistantCompat {
                     }
                 }
                 waypoints.add(newWaypoint);
+                reloadFMSEnrouteScreen(waypoints);
                 return true;
             } catch (Exception e2) {
                 LOGGER.warn("[FACompat] addEnrouteWaypoint (fallback) failed: {}", e2.getMessage());
@@ -574,6 +595,7 @@ public class FlightAssistantCompat {
             }
             setter.setAccessible(true);
             setter.invoke(plan, depData);
+            reloadFMSDepartureScreen(depData);
             return true;
         } catch (NoSuchMethodException ex) {
             // Fallback: use Kotlin synthetic constructor (mask value 12, bits 2-3 → defaults for elevation & thrust)
@@ -590,6 +612,7 @@ public class FlightAssistantCompat {
                 }
                 setter.setAccessible(true);
                 setter.invoke(plan, depData);
+                reloadFMSDepartureScreen(depData);
                 return true;
             } catch (Exception e2) {
                 LOGGER.warn("[FACompat] setDepartureWaypoint (fallback) failed: {}", e2.getMessage());
@@ -646,6 +669,7 @@ public class FlightAssistantCompat {
             }
             setter.setAccessible(true);
             setter.invoke(plan, arrData);
+            reloadFMSArrivalScreen(arrData);
             return true;
         } catch (NoSuchMethodException ex) {
             // Fallback: use Kotlin synthetic constructor (mask value 252, bits 2-7 → defaults for everything
@@ -665,6 +689,7 @@ public class FlightAssistantCompat {
                 }
                 setter.setAccessible(true);
                 setter.invoke(plan, arrData);
+                reloadFMSArrivalScreen(arrData);
                 return true;
             } catch (Exception e2) {
                 LOGGER.warn("[FACompat] setArrivalWaypoint (fallback) failed: {}", e2.getMessage());
@@ -679,6 +704,74 @@ public class FlightAssistantCompat {
     // =========================================================================
     // Utility helpers
     // =========================================================================
+
+    // -------------------------------------------------------------------------
+    // FMS companion-object reload helpers
+    // -------------------------------------------------------------------------
+    // FA's FMS screens (DepartureScreen, ArrivalScreen, EnrouteScreen) cache
+    // the plan state in a companion-object (static) field. When this mod writes
+    // directly to the live FlightPlanComputer that cache becomes stale:
+    //   • The "Discard Changes" button lights up (screen state ≠ live data).
+    //   • Worse: DepartureScreen/ArrivalScreen call state.save(computers.plan) on
+    //     close, which writes the OLD cached data back and wipes our changes.
+    // Calling companion.reload(newData) immediately after each write keeps the
+    // cache in sync so the FMS screens open cleanly without any prompt.
+
+    /**
+     * Syncs the DepartureScreen companion-object state with {@code departureData}.
+     * <p>Equivalent to calling {@code DepartureScreen.Companion.reload(departureData)}.</p>
+     */
+    private static void reloadFMSDepartureScreen(Object departureData) {
+        try {
+            Class<?> depDataClass = Class.forName(CLASS_DEPARTURE_DATA);
+            reloadFMSCompanion(CLASS_DEPARTURE_SCREEN, departureData, depDataClass);
+        } catch (Exception e) {
+            LOGGER.debug("[FACompat] reloadFMSDepartureScreen failed: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * Syncs the ArrivalScreen companion-object state with {@code arrivalData}.
+     * <p>Equivalent to calling {@code ArrivalScreen.Companion.reload(arrivalData)}.</p>
+     */
+    private static void reloadFMSArrivalScreen(Object arrivalData) {
+        try {
+            Class<?> arrDataClass = Class.forName(CLASS_ARRIVAL_DATA);
+            reloadFMSCompanion(CLASS_ARRIVAL_SCREEN, arrivalData, arrDataClass);
+        } catch (Exception e) {
+            LOGGER.debug("[FACompat] reloadFMSArrivalScreen failed: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * Syncs the EnrouteScreen companion-object state with the current
+     * {@code enrouteData} list.
+     * <p>Equivalent to calling {@code EnrouteScreen.Companion.reload(enrouteData)}.</p>
+     */
+    private static void reloadFMSEnrouteScreen(List<Object> enrouteData) {
+        try {
+            Class<?> screenClass = Class.forName(CLASS_ENROUTE_SCREEN);
+            Field companionField = screenClass.getDeclaredField("Companion");
+            companionField.setAccessible(true);
+            Object companion = companionField.get(null);
+            // Generic erasure: JVM sees List, not List<EnrouteWaypoint>
+            Method reload = companion.getClass().getMethod("reload", List.class);
+            reload.invoke(companion, enrouteData);
+        } catch (Exception e) {
+            LOGGER.debug("[FACompat] reloadFMSEnrouteScreen failed: {}", e.getMessage());
+        }
+    }
+
+    /** Calls the {@code reload(data)} method on the Kotlin companion object of the named screen. */
+    private static void reloadFMSCompanion(String screenClassName, Object data, Class<?> dataClass)
+            throws Exception {
+        Class<?> screenClass = Class.forName(screenClassName);
+        Field companionField = screenClass.getDeclaredField("Companion");
+        companionField.setAccessible(true);
+        Object companion = companionField.get(null);
+        Method reload = companion.getClass().getMethod("reload", dataClass);
+        reload.invoke(companion, data);
+    }
 
     /** Enables FA autopilot so selected modes affect heading/pitch outputs. */
     private static boolean enableAutoPilot(Object autoFlightComputer) {

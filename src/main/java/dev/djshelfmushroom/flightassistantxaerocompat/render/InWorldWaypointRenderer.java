@@ -4,6 +4,7 @@ import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.vertex.*;
 import dev.djshelfmushroom.flightassistantxaerocompat.FlightAssistantXaeroCompat;
 import dev.djshelfmushroom.flightassistantxaerocompat.compat.FlightAssistantCompat;
+import dev.djshelfmushroom.flightassistantxaerocompat.compat.XaeroCompat;
 import net.minecraft.client.Camera;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
@@ -15,6 +16,7 @@ import net.minecraftforge.eventbus.api.SubscribeEvent;
 import org.joml.Matrix4f;
 import org.joml.Quaternionf;
 
+import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 
@@ -51,6 +53,7 @@ import java.util.Locale;
  *   <li><b>Enroute</b> — cyan</li>
  *   <li><b>Active enroute waypoint</b> — bright yellow</li>
  *   <li><b>Arrival</b> — red</li>
+ *   <li><b>Xaero World Map saved waypoint</b> — white</li>
  * </ul>
  *
  * <p>Waypoints further than 4096 blocks (horizontal) are culled.</p>
@@ -68,6 +71,8 @@ public class InWorldWaypointRenderer {
     private static final int COLOR_ENROUTE   = 0xFF00BBBB;
     private static final int COLOR_ACTIVE    = 0xFFFFFF00;
     private static final int COLOR_ARRIVAL   = 0xFFBB0000;
+    /** White — used for Xaero World Map saved waypoints. */
+    private static final int COLOR_XWM       = 0xFFFFFFFF;
 
     /**
      * Shared label BufferSource — allocated once and reused every frame to
@@ -88,7 +93,8 @@ public class InWorldWaypointRenderer {
     @SubscribeEvent
     public void onRenderLevelStage(RenderLevelStageEvent event) {
         if (event.getStage() != RenderLevelStageEvent.Stage.AFTER_TRANSLUCENT_BLOCKS) return;
-        if (!FlightAssistantXaeroCompat.flightAssistantPresent) return;
+        if (!FlightAssistantXaeroCompat.flightAssistantPresent
+                && !FlightAssistantXaeroCompat.xaeroPresent) return;
 
         Minecraft mc = Minecraft.getInstance();
         if (mc.level == null || mc.player == null) return;
@@ -102,7 +108,14 @@ public class InWorldWaypointRenderer {
         boolean hasArr = arrival   != null && !FlightAssistantCompat.isPlanDataDefault(arrival);
         boolean hasEnr = enroute   != null && !enroute.isEmpty();
 
-        if (!hasDep && !hasArr && !hasEnr) return;
+        // XWM waypoints — only loaded when Xaero is present
+        List<Object> xwmWaypoints = Collections.emptyList();
+        if (FlightAssistantXaeroCompat.xaeroPresent) {
+            xwmWaypoints = XaeroCompat.getCurrentDimensionWaypoints();
+        }
+        boolean hasXwm = !xwmWaypoints.isEmpty();
+
+        if (!hasDep && !hasArr && !hasEnr && !hasXwm) return;
 
         PoseStack poseStack = event.getPoseStack();
         Camera camera       = event.getCamera();
@@ -147,6 +160,25 @@ public class InWorldWaypointRenderer {
                 if (wx != null && wz != null) {
                     renderWaypoint(poseStack, camera, camPos, wx, camPos.y, wz,
                             "ARR", COLOR_ARRIVAL);
+                }
+            }
+
+            if (hasXwm) {
+                String currentDimension = mc.level.dimension().location().toString();
+                for (Object wp : xwmWaypoints) {
+                    Integer wx = XaeroCompat.getWaypointX(wp);
+                    Integer wz = XaeroCompat.getWaypointZ(wp);
+                    if (wx == null || wz == null) continue;
+                    // Filter to current dimension; include if dimension is unknown
+                    String wpDim = XaeroCompat.getWaypointDimension(wp);
+                    if (wpDim != null && !wpDim.equals(currentDimension)) continue;
+                    // Use stored Y if valid (> 0), otherwise use camera altitude
+                    Integer wy = XaeroCompat.getWaypointY(wp);
+                    double worldY = (wy != null && wy > 0) ? wy : camPos.y;
+                    String name = XaeroCompat.getWaypointName(wp);
+                    String fallbackLabel = wx + "," + wz;
+                    renderWaypoint(poseStack, camera, camPos, wx, worldY, wz,
+                            (name != null && !name.isEmpty()) ? name : fallbackLabel, COLOR_XWM);
                 }
             }
 

@@ -59,7 +59,7 @@ public class FlightAssistantXaeroCompat {
             LOGGER.info("[{}] Waypoint context menu handler registered.", MOD_ID);
         }
 
-        if (flightAssistantPresent) {
+        if (flightAssistantPresent || xaeroPresent) {
             MinecraftForge.EVENT_BUS.register(new InWorldWaypointRenderer());
             LOGGER.info("[{}] In-world waypoint renderer registered.", MOD_ID);
         }

@@ -148,7 +148,7 @@ public class InWorldWaypointRenderer {
                 Integer wz = FlightAssistantCompat.getPlanCoordinatesZ(departure);
                 // DepartureData has no flight altitude — use terrain surface height as world-fixed fallback
                 if (wx != null && wz != null) {
-                    renderWaypoint(poseStack, camera, camPos, wx, surfaceY(mc.level, wx, wz), wz,
+                    renderWaypoint(poseStack, camera, camPos, wx, surfaceY(mc.level, wx, wz, camPos.y), wz,
                             "DEP", COLOR_DEPARTURE);
                 }
             }
@@ -160,7 +160,7 @@ public class InWorldWaypointRenderer {
                     Integer wz  = FlightAssistantCompat.getPlanCoordinatesZ(wp);
                     Integer alt = FlightAssistantCompat.getEnrouteAltitude(wp);
                     if (wx == null || wz == null) continue;
-                    double wy   = alt != null ? alt : surfaceY(mc.level, wx, wz);
+                    double wy   = alt != null ? alt : surfaceY(mc.level, wx, wz, camPos.y);
                     int color   = (i == activeIdx) ? COLOR_ACTIVE : COLOR_ENROUTE;
                     String label = "WP" + (i + 1) + (alt != null ? "/" + alt : "");
                     renderWaypoint(poseStack, camera, camPos, wx, wy, wz, label, color);
@@ -172,7 +172,7 @@ public class InWorldWaypointRenderer {
                 Integer wz = FlightAssistantCompat.getPlanCoordinatesZ(arrival);
                 // ArrivalData has no flight altitude — use terrain surface height as world-fixed fallback
                 if (wx != null && wz != null) {
-                    renderWaypoint(poseStack, camera, camPos, wx, surfaceY(mc.level, wx, wz), wz,
+                    renderWaypoint(poseStack, camera, camPos, wx, surfaceY(mc.level, wx, wz, camPos.y), wz,
                             "ARR", COLOR_ARRIVAL);
                 }
             }
@@ -188,7 +188,7 @@ public class InWorldWaypointRenderer {
                     if (wpDim != null && !wpDim.equals(currentDimension)) continue;
                     // Use stored Y if valid (> 0), otherwise query terrain surface height
                     Integer wy = XaeroCompat.getWaypointY(wp);
-                    double worldY = (wy != null && wy > 0) ? wy : surfaceY(mc.level, wx, wz);
+                    double worldY = (wy != null && wy > 0) ? wy : surfaceY(mc.level, wx, wz, camPos.y);
                     String name = XaeroCompat.getWaypointName(wp);
                     String fallbackLabel = wx + "," + wz;
                     renderWaypoint(poseStack, camera, camPos, wx, worldY, wz,
@@ -377,17 +377,21 @@ public class InWorldWaypointRenderer {
      * altitude.  Queries the motion-blocking heightmap at the given X/Z so the
      * marker sits at the terrain surface at the waypoint location.
      *
-     * <p>If the chunk at (wx, wz) is not yet loaded the heightmap returns 0;
-     * in that case falls back to {@code seaLevel + 10} to keep the marker
-     * visible above water rather than buried underground.</p>
+     * <p>If the chunk at (wx, wz) is not yet loaded the heightmap returns 0.
+     * Distant waypoints (beyond render distance) are almost always in unloaded
+     * chunks, so we use {@code fallbackY} — typically {@code camPos.y} — so the
+     * marker stays at the player's flight altitude and remains visible.  Once the
+     * chunk loads (i.e. the player is nearby) the terrain surface height is used
+     * instead.</p>
      *
-     * @param level the current client level
-     * @param wx    waypoint world X (block coordinate)
-     * @param wz    waypoint world Z (block coordinate)
+     * @param level     the current client level
+     * @param wx        waypoint world X (block coordinate)
+     * @param wz        waypoint world Z (block coordinate)
+     * @param fallbackY Y to use when the chunk is not loaded (pass {@code camPos.y})
      * @return world Y to use as the waypoint's render altitude
      */
-    private static double surfaceY(net.minecraft.world.level.Level level, int wx, int wz) {
+    private static double surfaceY(net.minecraft.world.level.Level level, int wx, int wz, double fallbackY) {
         int h = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, wx, wz);
-        return h > 0 ? h : level.getSeaLevel() + 10;
+        return h > 0 ? h : fallbackY;
     }
 }

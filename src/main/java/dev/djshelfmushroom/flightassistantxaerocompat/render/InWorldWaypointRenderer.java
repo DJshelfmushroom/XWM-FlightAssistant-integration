@@ -145,9 +145,9 @@ public class InWorldWaypointRenderer {
             if (hasDep) {
                 Integer wx = FlightAssistantCompat.getPlanCoordinatesX(departure);
                 Integer wz = FlightAssistantCompat.getPlanCoordinatesZ(departure);
-                // DepartureData has no flight altitude — use camera Y as fallback
+                // DepartureData has no flight altitude — use sea level as world-fixed fallback
                 if (wx != null && wz != null) {
-                    renderWaypoint(poseStack, camera, camPos, wx, camPos.y, wz,
+                    renderWaypoint(poseStack, camera, camPos, wx, mc.level.getSeaLevel(), wz,
                             "DEP", COLOR_DEPARTURE);
                 }
             }
@@ -159,7 +159,7 @@ public class InWorldWaypointRenderer {
                     Integer wz  = FlightAssistantCompat.getPlanCoordinatesZ(wp);
                     Integer alt = FlightAssistantCompat.getEnrouteAltitude(wp);
                     if (wx == null || wz == null) continue;
-                    double wy   = alt != null ? alt : camPos.y;
+                    double wy   = alt != null ? alt : mc.level.getSeaLevel();
                     int color   = (i == activeIdx) ? COLOR_ACTIVE : COLOR_ENROUTE;
                     String label = "WP" + (i + 1) + (alt != null ? "/" + alt : "");
                     renderWaypoint(poseStack, camera, camPos, wx, wy, wz, label, color);
@@ -169,9 +169,9 @@ public class InWorldWaypointRenderer {
             if (hasArr) {
                 Integer wx = FlightAssistantCompat.getPlanCoordinatesX(arrival);
                 Integer wz = FlightAssistantCompat.getPlanCoordinatesZ(arrival);
-                // ArrivalData has no flight altitude — use camera Y as fallback
+                // ArrivalData has no flight altitude — use sea level as world-fixed fallback
                 if (wx != null && wz != null) {
-                    renderWaypoint(poseStack, camera, camPos, wx, camPos.y, wz,
+                    renderWaypoint(poseStack, camera, camPos, wx, mc.level.getSeaLevel(), wz,
                             "ARR", COLOR_ARRIVAL);
                 }
             }
@@ -185,9 +185,9 @@ public class InWorldWaypointRenderer {
                     // Filter to current dimension; include if dimension is unknown
                     String wpDim = XaeroCompat.getWaypointDimension(wp);
                     if (wpDim != null && !wpDim.equals(currentDimension)) continue;
-                    // Use stored Y if valid (> 0), otherwise use camera altitude
+                    // Use stored Y if valid (> 0), otherwise use sea level as world-fixed fallback
                     Integer wy = XaeroCompat.getWaypointY(wp);
-                    double worldY = (wy != null && wy > 0) ? wy : camPos.y;
+                    double worldY = (wy != null && wy > 0) ? wy : mc.level.getSeaLevel();
                     String name = XaeroCompat.getWaypointName(wp);
                     String fallbackLabel = wx + "," + wz;
                     renderWaypoint(poseStack, camera, camPos, wx, worldY, wz,

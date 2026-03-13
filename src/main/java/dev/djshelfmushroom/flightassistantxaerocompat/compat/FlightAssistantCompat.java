@@ -517,6 +517,7 @@ public class FlightAssistantCompat {
 
             waypoints.add(newWaypoint);
             reloadFMSEnrouteScreen(waypoints);
+            clearSelectedLateralMode();
             return true;
 
         } catch (NoSuchMethodException ex) {
@@ -546,6 +547,7 @@ public class FlightAssistantCompat {
                 }
                 waypoints.add(newWaypoint);
                 reloadFMSEnrouteScreen(waypoints);
+                clearSelectedLateralMode();
                 return true;
             } catch (Exception e2) {
                 LOGGER.warn("[FACompat] addEnrouteWaypoint (fallback) failed: {}", e2.getMessage());
@@ -596,6 +598,7 @@ public class FlightAssistantCompat {
             setter.setAccessible(true);
             setter.invoke(plan, depData);
             reloadFMSDepartureScreen(depData);
+            clearSelectedLateralMode();
             return true;
         } catch (NoSuchMethodException ex) {
             // Fallback: use Kotlin synthetic constructor (mask value 12, bits 2-3 → defaults for elevation & thrust)
@@ -613,6 +616,7 @@ public class FlightAssistantCompat {
                 setter.setAccessible(true);
                 setter.invoke(plan, depData);
                 reloadFMSDepartureScreen(depData);
+                clearSelectedLateralMode();
                 return true;
             } catch (Exception e2) {
                 LOGGER.warn("[FACompat] setDepartureWaypoint (fallback) failed: {}", e2.getMessage());
@@ -670,6 +674,7 @@ public class FlightAssistantCompat {
             setter.setAccessible(true);
             setter.invoke(plan, arrData);
             reloadFMSArrivalScreen(arrData);
+            clearSelectedLateralMode();
             return true;
         } catch (NoSuchMethodException ex) {
             // Fallback: use Kotlin synthetic constructor (mask value 252, bits 2-7 → defaults for everything
@@ -690,6 +695,7 @@ public class FlightAssistantCompat {
                 setter.setAccessible(true);
                 setter.invoke(plan, arrData);
                 reloadFMSArrivalScreen(arrData);
+                clearSelectedLateralMode();
                 return true;
             } catch (Exception e2) {
                 LOGGER.warn("[FACompat] setArrivalWaypoint (fallback) failed: {}", e2.getMessage());
@@ -771,6 +777,36 @@ public class FlightAssistantCompat {
         Object companion = companionField.get(null);
         Method reload = companion.getClass().getMethod("reload", dataClass);
         reload.invoke(companion, data);
+    }
+
+    /**
+     * Clears {@code AutoFlightComputer.selectedLateralMode} to {@code null} so that
+     * FA's own {@code FlightPlanComputer.getLateralMode()} drives navigation.
+     *
+     * <p>FA resolves the active lateral mode as
+     * {@code selectedLateralMode ?: computers.plan.getLateralMode()}.
+     * If a previous "Fly Here" or "Set as COORDS Target" action left a static
+     * {@code DirectCoordinatesLateralMode} in {@code selectedLateralMode}, it would
+     * permanently override the flight-plan mode even after FA advances to the next
+     * waypoint. Clearing it here hands control back to FA's sequencing logic.</p>
+     *
+     * <p>Verified against FA 3.0.1: Kotlin {@code var selectedLateralMode: LateralMode?}
+     * → JVM setter {@code setSelectedLateralMode(LateralMode)}.</p>
+     */
+    private static void clearSelectedLateralMode() {
+        Object afc = getAutoFlightComputer();
+        if (afc == null) return;
+        try {
+            Method setter = findMethodByName(afc.getClass(), "setSelectedLateralMode");
+            if (setter == null) {
+                LOGGER.debug("[FACompat] clearSelectedLateralMode: setSelectedLateralMode not found");
+                return;
+            }
+            setter.setAccessible(true);
+            setter.invoke(afc, (Object) null);
+        } catch (Exception e) {
+            LOGGER.debug("[FACompat] clearSelectedLateralMode failed: {}", e.getMessage());
+        }
     }
 
     /** Enables FA autopilot so selected modes affect heading/pitch outputs. */

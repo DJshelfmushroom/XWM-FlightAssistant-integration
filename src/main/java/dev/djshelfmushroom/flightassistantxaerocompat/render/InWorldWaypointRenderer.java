@@ -10,11 +10,11 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.renderer.GameRenderer;
 import net.minecraft.client.renderer.MultiBufferSource;
+import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.phys.Vec3;
 import net.minecraftforge.client.event.RenderLevelStageEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import org.joml.Matrix4f;
-import org.joml.Quaternionf;
 
 import java.util.Collections;
 import java.util.List;
@@ -43,8 +43,9 @@ import java.util.Locale;
  *
  * <h3>Visual elements (per waypoint)</h3>
  * <ul>
- *   <li>A wire-frame box outline at the waypoint's target altitude (or camera
- *       altitude for departure/arrival which have no explicit flight altitude).</li>
+ *   <li>A wire-frame box outline at the waypoint's target altitude (or terrain
+ *       surface height at the waypoint X/Z for departure/arrival which have no
+ *       explicit flight altitude).</li>
  *   <li>A billboard text label floating above the box showing the waypoint
  *       identifier, target altitude (enroute only), and the horizontal
  *       distance from the player.</li>
@@ -145,9 +146,9 @@ public class InWorldWaypointRenderer {
             if (hasDep) {
                 Integer wx = FlightAssistantCompat.getPlanCoordinatesX(departure);
                 Integer wz = FlightAssistantCompat.getPlanCoordinatesZ(departure);
-                // DepartureData has no flight altitude — use sea level as world-fixed fallback
+                // DepartureData has no flight altitude — use terrain surface height as world-fixed fallback
                 if (wx != null && wz != null) {
-                    renderWaypoint(poseStack, camera, camPos, wx, mc.level.getSeaLevel(), wz,
+                    renderWaypoint(poseStack, camera, camPos, wx, surfaceY(mc.level, wx, wz), wz,
                             "DEP", COLOR_DEPARTURE);
                 }
             }
@@ -159,7 +160,7 @@ public class InWorldWaypointRenderer {
                     Integer wz  = FlightAssistantCompat.getPlanCoordinatesZ(wp);
                     Integer alt = FlightAssistantCompat.getEnrouteAltitude(wp);
                     if (wx == null || wz == null) continue;
-                    double wy   = alt != null ? alt : mc.level.getSeaLevel();
+                    double wy   = alt != null ? alt : surfaceY(mc.level, wx, wz);
                     int color   = (i == activeIdx) ? COLOR_ACTIVE : COLOR_ENROUTE;
                     String label = "WP" + (i + 1) + (alt != null ? "/" + alt : "");
                     renderWaypoint(poseStack, camera, camPos, wx, wy, wz, label, color);
@@ -169,9 +170,9 @@ public class InWorldWaypointRenderer {
             if (hasArr) {
                 Integer wx = FlightAssistantCompat.getPlanCoordinatesX(arrival);
                 Integer wz = FlightAssistantCompat.getPlanCoordinatesZ(arrival);
-                // ArrivalData has no flight altitude — use sea level as world-fixed fallback
+                // ArrivalData has no flight altitude — use terrain surface height as world-fixed fallback
                 if (wx != null && wz != null) {
-                    renderWaypoint(poseStack, camera, camPos, wx, mc.level.getSeaLevel(), wz,
+                    renderWaypoint(poseStack, camera, camPos, wx, surfaceY(mc.level, wx, wz), wz,
                             "ARR", COLOR_ARRIVAL);
                 }
             }
@@ -185,9 +186,9 @@ public class InWorldWaypointRenderer {
                     // Filter to current dimension; include if dimension is unknown
                     String wpDim = XaeroCompat.getWaypointDimension(wp);
                     if (wpDim != null && !wpDim.equals(currentDimension)) continue;
-                    // Use stored Y if valid (> 0), otherwise use sea level as world-fixed fallback
+                    // Use stored Y if valid (> 0), otherwise query terrain surface height
                     Integer wy = XaeroCompat.getWaypointY(wp);
-                    double worldY = (wy != null && wy > 0) ? wy : mc.level.getSeaLevel();
+                    double worldY = (wy != null && wy > 0) ? wy : surfaceY(mc.level, wx, wz);
                     String name = XaeroCompat.getWaypointName(wp);
                     String fallbackLabel = wx + "," + wz;
                     renderWaypoint(poseStack, camera, camPos, wx, worldY, wz,
@@ -369,5 +370,24 @@ public class InWorldWaypointRenderer {
             return String.format(Locale.ROOT, "%.1fkm", dist / 1000.0);
         }
         return String.format(Locale.ROOT, "%.0fm", dist);
+    }
+
+    /**
+     * Returns a world-fixed Y coordinate to use for waypoints without an explicit
+     * altitude.  Queries the motion-blocking heightmap at the given X/Z so the
+     * marker sits at the terrain surface at the waypoint location.
+     *
+     * <p>If the chunk at (wx, wz) is not yet loaded the heightmap returns 0;
+     * in that case falls back to {@code seaLevel + 10} to keep the marker
+     * visible above water rather than buried underground.</p>
+     *
+     * @param level the current client level
+     * @param wx    waypoint world X (block coordinate)
+     * @param wz    waypoint world Z (block coordinate)
+     * @return world Y to use as the waypoint's render altitude
+     */
+    private static double surfaceY(net.minecraft.world.level.Level level, int wx, int wz) {
+        int h = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, wx, wz);
+        return h > 0 ? h : level.getSeaLevel() + 10;
     }
 }

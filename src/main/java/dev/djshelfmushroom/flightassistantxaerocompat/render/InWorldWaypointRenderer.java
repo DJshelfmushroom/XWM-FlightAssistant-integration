@@ -17,8 +17,10 @@ import net.minecraftforge.eventbus.api.SubscribeEvent;
 import org.joml.Matrix4f;
 
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
 /**
  * Renders FlightAssistant flight-plan waypoints as 3D in-world markers while
@@ -43,9 +45,10 @@ import java.util.Locale;
  *
  * <h3>Visual elements (per waypoint)</h3>
  * <ul>
- *   <li>A wire-frame box outline at the waypoint's target altitude (or terrain
- *       surface height at the waypoint X/Z for departure/arrival which have no
- *       explicit flight altitude).</li>
+ *   <li>A wire-frame box outline at the waypoint's target altitude (or cached
+ *       terrain surface height at the waypoint X/Z for departure/arrival which
+ *       have no explicit flight altitude; the height is queried once when the
+ *       chunk is loaded and cached for all subsequent frames).</li>
  *   <li>A billboard text label floating above the box showing the waypoint
  *       identifier, target altitude (enroute only), and the horizontal
  *       distance from the player.</li>
@@ -84,6 +87,21 @@ public class InWorldWaypointRenderer {
      */
     private final MultiBufferSource.BufferSource labelBuf =
             MultiBufferSource.immediate(new BufferBuilder(1536));
+
+    /**
+     * Cache of terrain-surface Y values keyed by packed (X, Z) block
+     * coordinate.  Entries are written once the containing chunk is loaded
+     * (i.e. {@link net.minecraft.world.level.Level#getHeight} returns > 0)
+     * and reused on every subsequent frame, making the unloaded-chunk
+     * fallback a transient one-time event rather than the steady state for
+     * distant waypoints.
+     *
+     * <p>The cache is per-renderer-instance (i.e. per game session).  It is
+     * intentionally <em>not</em> cleared on chunk-unload events: the
+     * heightmap value for a loaded chunk is stable for the lifetime of the
+     * world and does not need to be re-queried.</p>
+     */
+    private final Map<Long, Double> surfaceYCache = new HashMap<>();
 
     // =========================================================================
     // Event handler
@@ -373,25 +391,37 @@ public class InWorldWaypointRenderer {
     }
 
     /**
-     * Returns a world-fixed Y coordinate to use for waypoints without an explicit
-     * altitude.  Queries the motion-blocking heightmap at the given X/Z so the
-     * marker sits at the terrain surface at the waypoint location.
+     * Returns a world-fixed Y coordinate for waypoints without an explicit
+     * altitude. Queries {@code MOTION_BLOCKING_NO_LEAVES} at (wx, wz) and
+     * caches the result so the unloaded-chunk fallback is only a transient
+     * one-frame event until the chunk loads, rather than the perpetual steady
+     * state for distant waypoints.
      *
-     * <p>If the chunk at (wx, wz) is not yet loaded the heightmap returns 0.
-     * Distant waypoints (beyond render distance) are almost always in unloaded
-     * chunks, so we use {@code fallbackY} — typically {@code camPos.y} — so the
-     * marker stays at the player's flight altitude and remains visible.  Once the
-     * chunk loads (i.e. the player is nearby) the terrain surface height is used
-     * instead.</p>
+     * <ul>
+     *   <li>Chunk loaded → terrain surface height cached and returned (world-fixed).</li>
+     *   <li>Chunk not yet loaded (height == 0) → return {@code fallbackY}
+     *       <em>without</em> caching, so the query is retried next frame once
+     *       the chunk loads.</li>
+     * </ul>
      *
      * @param level     the current client level
      * @param wx        waypoint world X (block coordinate)
      * @param wz        waypoint world Z (block coordinate)
-     * @param fallbackY Y to use when the chunk is not loaded (pass {@code camPos.y})
+     * @param fallbackY Y to use when the chunk is not yet loaded (pass {@code camPos.y})
      * @return world Y to use as the waypoint's render altitude
      */
-    private static double surfaceY(net.minecraft.world.level.Level level, int wx, int wz, double fallbackY) {
+    private double surfaceY(net.minecraft.world.level.Level level, int wx, int wz, double fallbackY) {
+        long key = ((long) wx << 32) | (wz & 0xFFFFFFFFL);
+        Double cached = surfaceYCache.get(key);
+        if (cached != null) return cached;
+
         int h = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, wx, wz);
-        return h > 0 ? h : fallbackY;
+        if (h > 0) {
+            surfaceYCache.put(key, (double) h);
+            return h;
+        }
+        // Chunk not yet loaded — return fallback without caching so we retry
+        // next frame once the chunk is available.
+        return fallbackY;
     }
 }

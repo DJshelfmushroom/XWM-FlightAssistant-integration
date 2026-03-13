@@ -99,10 +99,18 @@ public class InWorldWaypointRenderer {
         Minecraft mc = Minecraft.getInstance();
         if (mc.level == null || mc.player == null) return;
 
-        Object departure     = FlightAssistantCompat.getDepartureData();
-        Object arrival       = FlightAssistantCompat.getArrivalData();
-        List<Object> enroute = FlightAssistantCompat.getEnrouteWaypoints();
-        int activeIdx        = FlightAssistantCompat.getActiveWaypointIndex();
+        // Guard: only read FA data if FA is present — otherwise getComputerHost() logs
+        // a ClassNotFoundException WARN every frame, causing severe log spam.
+        Object departure     = null;
+        Object arrival       = null;
+        List<Object> enroute = Collections.emptyList();
+        int activeIdx        = -1;
+        if (FlightAssistantXaeroCompat.flightAssistantPresent) {
+            departure = FlightAssistantCompat.getDepartureData();
+            arrival   = FlightAssistantCompat.getArrivalData();
+            enroute   = FlightAssistantCompat.getEnrouteWaypoints();
+            activeIdx = FlightAssistantCompat.getActiveWaypointIndex();
+        }
 
         boolean hasDep = departure != null && !FlightAssistantCompat.isPlanDataDefault(departure);
         boolean hasArr = arrival   != null && !FlightAssistantCompat.isPlanDataDefault(arrival);
@@ -181,12 +189,14 @@ public class InWorldWaypointRenderer {
                             (name != null && !name.isEmpty()) ? name : fallbackLabel, COLOR_XWM);
                 }
             }
-
-            labelBuf.endBatch();
         } catch (Exception e) {
             FlightAssistantXaeroCompat.LOGGER.warn(
                     "[FA-Xaero] InWorldWaypointRenderer failed", e);
         } finally {
+            try { labelBuf.endBatch(); } catch (Exception e) {
+                FlightAssistantXaeroCompat.LOGGER.debug(
+                        "[FA-Xaero] labelBuf.endBatch() failed", e);
+            }
             poseStack.popPose();
         }
     }

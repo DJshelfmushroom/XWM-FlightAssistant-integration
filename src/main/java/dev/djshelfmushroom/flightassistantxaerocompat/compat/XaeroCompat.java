@@ -162,13 +162,28 @@ public class XaeroCompat {
     // =========================================================================
 
     /**
+     * Cached WaypointsManager singleton — resolved once on the first successful
+     * call to {@link #getCurrentDimensionWaypoints()} and reused every frame.
+     * Xaero's WaypointsManager is a stable singleton that persists for the
+     * lifetime of the game session, so caching it is safe.
+     *
+     * <p>This field is only ever written from the Minecraft render thread
+     * (via {@code onRenderLevelStage}), so there is no concurrency concern.</p>
+     */
+    private static Object cachedWaypointsManager = null;
+
+    /**
      * Returns all Xaero waypoints saved for the player's current dimension.
      *
-     * <p>Uses reflection with multiple fallback strategies to stay compatible
-     * across Xaero versions. The hierarchy navigated is:
+     * <p>On the first call the method walks the Xaero object hierarchy to
+     * locate the {@code WaypointsManager} (doing Class.forName / reflection
+     * once) and caches it. Subsequent frames use the cached manager directly,
+     * so the per-frame cost is only the fast no-arg container/set/list lookups.</p>
+     *
+     * <p>The hierarchy navigated is:
      * <pre>
      * XaeroMinimapSession (or WorldMap.instance)
-     *   → WaypointsManager
+     *   → WaypointsManager               ← cached after first resolution
      *     → WaypointWorldContainer  (one per dimension / server world)
      *       → WaypointSet(s)
      *         → List&lt;Waypoint&gt;
@@ -178,7 +193,6 @@ public class XaeroCompat {
      * <p>Xaero 1.39.2: {@code xaero.common.XaeroMinimapSession.getCurrentSession()
      * .getWaypointsManager()}</p>
      */
-    @SuppressWarnings("unchecked")
     public static List<Object> getCurrentDimensionWaypoints() {
         if (!FlightAssistantXaeroCompat.xaeroPresent) return Collections.emptyList();
         Minecraft mc = Minecraft.getInstance();
@@ -186,18 +200,38 @@ public class XaeroCompat {
 
         String dimension = mc.level.dimension().location().toString();
 
-        // Strategy 1: via xaero.common.XaeroMinimapSession (available in Xaero Minimap + World Map)
+        // Lazily resolve (and cache) the WaypointsManager
+        if (cachedWaypointsManager == null) {
+            cachedWaypointsManager = resolveWaypointsManager();
+        }
+        if (cachedWaypointsManager == null) return Collections.emptyList();
+
+        // Fast path: use cached manager with no-arg current-container getter
+        List<Object> wps = extractWaypointsFromManager(cachedWaypointsManager);
+        if (!wps.isEmpty()) return wps;
+
+        // Dimension-aware fallback (e.g. non-overworld dimensions on some Xaero builds)
+        return extractWaypointsFromManagerByDimension(cachedWaypointsManager, dimension);
+    }
+
+    /**
+     * One-time resolution of the WaypointsManager via reflection.
+     * Called at most once per game session; cached result is stored in
+     * {@link #cachedWaypointsManager}.
+     */
+    private static Object resolveWaypointsManager() {
+        // Strategy 1: XaeroMinimapSession.getCurrentSession().getWaypointsManager()
         try {
             Class<?> sessionClass = Class.forName("xaero.common.XaeroMinimapSession");
             Method getCurrentSession = sessionClass.getMethod("getCurrentSession");
             Object session = getCurrentSession.invoke(null);
             if (session != null) {
-                List<Object> wps = extractWaypointsFromRoot(session);
-                if (!wps.isEmpty()) return wps;
+                Object wm = tryInvokeOrField(session, "getWaypointsManager", "waypointsManager");
+                if (wm != null) return wm;
             }
         } catch (Exception ignored) {}
 
-        // Strategy 2: via xaero.map.WorldMap static instance field
+        // Strategy 2: WorldMap.instance.getWaypointsManager()
         try {
             Class<?> worldMapClass = Class.forName("xaero.map.WorldMap");
             Object worldMap = null;
@@ -210,44 +244,28 @@ public class XaeroCompat {
                 } catch (NoSuchFieldException ignored) {}
             }
             if (worldMap != null) {
-                List<Object> wps = extractWaypointsFromRoot(worldMap);
-                if (!wps.isEmpty()) return wps;
+                Object wm = tryInvokeOrField(worldMap, "getWaypointsManager", "waypointsManager");
+                if (wm != null) return wm;
             }
         } catch (Exception ignored) {}
 
-        // Strategy 3: try dimension-aware lookup via XaeroMinimapSession if strategies 1/2 returned empty
-        try {
-            Class<?> sessionClass = Class.forName("xaero.common.XaeroMinimapSession");
-            Method getCurrentSession = sessionClass.getMethod("getCurrentSession");
-            Object session = getCurrentSession.invoke(null);
-            if (session != null) {
-                List<Object> wps = extractWaypointsFromRootByDimension(session, dimension);
-                if (!wps.isEmpty()) return wps;
-            }
-        } catch (Exception ignored) {}
-
-        return Collections.emptyList();
+        return null;
     }
 
     /**
-     * Navigates from a session/mod-instance root down to the per-dimension
-     * waypoint lists, using no-arg container getters (Xaero returns the
-     * currently active world/dimension automatically).
+     * Extracts waypoints from a resolved WaypointsManager using no-arg
+     * container getters (Xaero returns the currently active dimension automatically).
+     * JVM reflection caches {@link Method} lookups after the first call, so
+     * this path is fast on subsequent frames.
      */
     @SuppressWarnings("unchecked")
-    private static List<Object> extractWaypointsFromRoot(Object root) {
-        // Step 1 — get WaypointsManager
-        Object wm = tryInvokeOrField(root, "getWaypointsManager", "waypointsManager");
-        if (wm == null) return Collections.emptyList();
-
-        // Step 2 — get per-dimension container (no-arg variants that use the current world/dim)
+    private static List<Object> extractWaypointsFromManager(Object wm) {
         Object container = tryInvokeOrField(wm,
                 "getCurrentWorldContainer", "getWorldContainer",
                 "getCurrentDimensionContainer", "getDimensionContainer",
                 "getContainer");
         if (container == null) return Collections.emptyList();
 
-        // Step 3 — collect waypoints from all sets inside the container
         List<Object> result = new ArrayList<>();
         Object sets = tryInvokeOrField(container,
                 "getAllWaypointSets", "getWaypointSets", "getAllSets", "getSets");
@@ -256,7 +274,38 @@ public class XaeroCompat {
                 collectFromSet(set, result);
             }
         } else {
-            // Container might itself be a single set
+            // Container might itself be a single WaypointSet
+            collectFromSet(container, result);
+        }
+        return result;
+    }
+
+    /**
+     * Dimension-aware fallback: tries single-arg container getters that accept
+     * a dimension resource-location string. Used when the no-arg strategy in
+     * {@link #extractWaypointsFromManager} returns an empty list (e.g., when
+     * the player is in a non-overworld dimension on some Xaero builds).
+     */
+    @SuppressWarnings("unchecked")
+    private static List<Object> extractWaypointsFromManagerByDimension(Object wm, String dimension) {
+        Object container = null;
+        for (String mname : new String[]{"getDimensionContainer", "getContainerForDimension", "getContainer"}) {
+            try {
+                Method m = wm.getClass().getMethod(mname, String.class);
+                container = m.invoke(wm, dimension);
+                if (container != null) break;
+            } catch (Exception ignored) {}
+        }
+        if (container == null) return Collections.emptyList();
+
+        List<Object> result = new ArrayList<>();
+        Object sets = tryInvokeOrField(container,
+                "getAllWaypointSets", "getWaypointSets", "getAllSets", "getSets");
+        if (sets instanceof Collection) {
+            for (Object set : (Collection<?>) sets) {
+                collectFromSet(set, result);
+            }
+        } else {
             collectFromSet(container, result);
         }
         return result;
@@ -301,41 +350,6 @@ public class XaeroCompat {
             }
         }
         return null;
-    }
-
-    /**
-     * Dimension-aware fallback: navigates to the waypoints manager and tries
-     * single-arg container getter variants that accept a dimension string.
-     * Used when the no-arg strategies in {@link #extractWaypointsFromRoot}
-     * return no results (e.g. when the user is in a non-overworld dimension).
-     */
-    @SuppressWarnings("unchecked")
-    private static List<Object> extractWaypointsFromRootByDimension(Object root, String dimension) {
-        Object wm = tryInvokeOrField(root, "getWaypointsManager", "waypointsManager");
-        if (wm == null) return Collections.emptyList();
-
-        // Try single-arg container getters that accept the dimension resource-location
-        Object container = null;
-        for (String mname : new String[]{"getDimensionContainer", "getContainerForDimension", "getContainer"}) {
-            try {
-                Method m = wm.getClass().getMethod(mname, String.class);
-                container = m.invoke(wm, dimension);
-                if (container != null) break;
-            } catch (Exception ignored) {}
-        }
-        if (container == null) return Collections.emptyList();
-
-        List<Object> result = new ArrayList<>();
-        Object sets = tryInvokeOrField(container,
-                "getAllWaypointSets", "getWaypointSets", "getAllSets", "getSets");
-        if (sets instanceof Collection) {
-            for (Object set : (Collection<?>) sets) {
-                collectFromSet(set, result);
-            }
-        } else {
-            collectFromSet(container, result);
-        }
-        return result;
     }
 
     // =========================================================================

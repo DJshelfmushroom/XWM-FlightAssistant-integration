@@ -158,14 +158,18 @@ public abstract class MixinGuiMap {
 
     /**
      * Returns the absolute MC world Y coordinate of the terrain surface at the
-     * given block X/Z, using the {@code MOTION_BLOCKING_NO_LEAVES} heightmap.
+     * given block X/Z, using the {@code WORLD_SURFACE} heightmap.
+     * {@code WORLD_SURFACE} uses {@code Heightmap.Usage.CLIENT_SYNC} and is
+     * always present in chunk network packets.  {@code MOTION_BLOCKING_NO_LEAVES}
+     * uses {@code Heightmap.Usage.LIVE} and is never sent to the client, so
+     * {@code getHeight()} would always return 0 regardless of chunk load state.
      * Returns 0 when the chunk is not loaded; callers treat 0 as "not set" and
      * fall back to other height sources at render time.
      */
     private static int terrainElevation(int x, int z) {
         Minecraft mc = Minecraft.getInstance();
         if (mc.level == null) return 0;
-        return mc.level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, x, z);
+        return mc.level.getHeight(Heightmap.Types.WORLD_SURFACE, x, z);
     }
 }
 

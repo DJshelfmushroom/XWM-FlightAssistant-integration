@@ -394,17 +394,24 @@ public class InWorldWaypointRenderer {
 
     /**
      * Returns a world-fixed Y coordinate for waypoints without an explicit
-     * altitude. Queries {@code MOTION_BLOCKING_NO_LEAVES} at (wx, wz) and
+     * altitude. Queries the {@code WORLD_SURFACE} heightmap at (wx, wz) and
      * caches the result so the per-frame cost is a single map lookup once the
      * chunk has loaded.
      *
+     * <p>{@code WORLD_SURFACE} uses {@code Heightmap.Usage.CLIENT_SYNC} so it
+     * is always included in chunk network packets and is reliable on the client.
+     * {@code MOTION_BLOCKING_NO_LEAVES} uses {@code Heightmap.Usage.LIVE} and
+     * is <em>never</em> included in chunk packets, making it always return 0 on
+     * the client regardless of chunk load state.</p>
+     *
      * <ul>
      *   <li>Chunk loaded → terrain surface height cached and returned (world-fixed).</li>
-     *   <li>Chunk not yet loaded (heightmap returns 0) → {@code level.getSeaLevel()}
-     *       is returned <em>without</em> caching, so the query is retried next
-     *       frame.  Sea level is a stable world-fixed coordinate and does not
-     *       follow the camera (unlike {@code camPos.y} which would make
-     *       {@code relY = 0} and glue markers to the camera altitude).</li>
+     *   <li>Chunk not yet loaded ({@code getHeight} returns 0) →
+     *       {@code level.getSeaLevel()} is returned <em>without</em> caching, so
+     *       the query is retried next frame.  Sea level is a stable world-fixed
+     *       coordinate and does not follow the camera (unlike {@code camPos.y}
+     *       which would make {@code relY = 0} and glue markers to the camera
+     *       altitude).</li>
      * </ul>
      *
      * @param level the current client level
@@ -417,7 +424,15 @@ public class InWorldWaypointRenderer {
         Double cached = surfaceYCache.get(key);
         if (cached != null) return cached;
 
-        int h = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, wx, wz);
+        // WORLD_SURFACE uses Heightmap.Usage.CLIENT_SYNC and is always included in
+        // chunk network packets.  MOTION_BLOCKING_NO_LEAVES uses Usage.LIVE and is
+        // NEVER sent to the client, so getHeight() for that type always returns 0
+        // regardless of chunk load state — every query would fall through to the
+        // fallback, making markers follow the camera instead of staying world-fixed.
+        int h = level.getHeight(Heightmap.Types.WORLD_SURFACE, wx, wz);
+        // getHeight() returns 0 specifically when the chunk is not loaded
+        // (the hasChunk guard in Level.getHeight returns 0 for absent chunks).
+        // For loaded chunks, the value is always > level.getMinBuildHeight() (≥ 1).
         if (h > 0) {
             surfaceYCache.put(key, (double) h);
             return h;

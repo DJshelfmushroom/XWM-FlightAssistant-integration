@@ -1,11 +1,13 @@
 package dev.djshelfmushroom.flightassistantxaerocompat.gui;
 
 import dev.djshelfmushroom.flightassistantxaerocompat.compat.FlightAssistantCompat;
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
+import net.minecraft.world.level.levelgen.Heightmap;
 import org.lwjgl.glfw.GLFW;
 
 /**
@@ -70,6 +72,24 @@ public class WaypointAltitudeScreen extends Screen {
         altitudeField.setMaxLength(8);
         altitudeField.setHint(Component.literal("required"));
         altitudeField.setResponder(this::onAltitudeChanged);
+
+        // Pre-populate with the terrain surface Y at the waypoint's XZ coordinates
+        // so the player has a sensible default (height above ground) instead of y=0.
+        // Falls back to sea level when the chunk is not yet loaded.
+        if (minecraft != null && minecraft.level != null) {
+            int bx = (int) Math.floor(waypointX);
+            int bz = (int) Math.floor(waypointZ);
+            int chunkX = net.minecraft.core.SectionPos.blockToSectionCoord(bx);
+            int chunkZ = net.minecraft.core.SectionPos.blockToSectionCoord(bz);
+            int defaultAlt;
+            if (minecraft.level.getChunkSource().hasChunk(chunkX, chunkZ)) {
+                defaultAlt = minecraft.level.getHeight(Heightmap.Types.WORLD_SURFACE, bx, bz);
+            } else {
+                defaultAlt = minecraft.level.getSeaLevel();
+            }
+            altitudeField.setValue(String.valueOf(defaultAlt));
+        }
+
         addRenderableWidget(altitudeField);
 
         // ---- Speed field (optional) ----

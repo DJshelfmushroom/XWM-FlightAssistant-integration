@@ -157,6 +157,23 @@ public class FlightAssistantCompat {
      */
     private static boolean approachFallbackTriggered = false;
 
+    // -------------------------------------------------------------------------
+    // Reflection caches for getActiveWaypointIndex() — populated on first use
+    // to avoid Class.forName + enum scan + getMethod on every client tick.
+    // -------------------------------------------------------------------------
+
+    /** Cached {@code EnrouteWaypoint.Active} enum class, or {@code null} if not yet loaded. */
+    private static Class<?> cachedEnrouteActiveClass;
+    /** Cached {@code Active.TARGET} enum constant, or {@code null} if not yet loaded. */
+    private static Object   cachedTargetConstant;
+    /**
+     * Cached {@code getActive()} method retrieved from the first EnrouteWaypoint instance seen.
+     * All waypoints share the same class so one cache entry suffices.
+     */
+    private static Method   cachedGetActiveMethod;
+    /** Set to {@code true} if the enum class or TARGET constant could not be loaded. */
+    private static boolean  enrouteActiveClassLoadFailed;
+
     // =========================================================================
     // Computer access helpers
     // =========================================================================
@@ -472,27 +489,44 @@ public class FlightAssistantCompat {
      *
      * <p>Verified against FA 3.0.1: {@code EnrouteWaypoint.active: Active?}
      * where {@code Active.TARGET} marks the currently targeted waypoint.</p>
+     *
+     * <p>Reflection artefacts ({@code Active} class, {@code TARGET} constant,
+     * {@code getActive} method) are cached on first successful use to avoid
+     * repeated {@code Class.forName} and enum-scan overhead on every client
+     * tick.</p>
      */
     public static int getActiveWaypointIndex() {
         List<Object> wps = getEnrouteWaypoints();
+        if (wps == null || wps.isEmpty()) return -1;
         try {
-            Class<?> activeClass = Class.forName(CLASS_ENROUTE_ACTIVE);
-            // Find the enum constant "TARGET"
-            Object targetConstant = null;
-            for (Object c : activeClass.getEnumConstants()) {
-                if ("TARGET".equals(((Enum<?>) c).name())) {
-                    targetConstant = c;
-                    break;
+            // Load and cache the Active enum class + TARGET constant on first call.
+            if (!enrouteActiveClassLoadFailed && cachedTargetConstant == null) {
+                Class<?> activeClass = Class.forName(CLASS_ENROUTE_ACTIVE);
+                for (Object c : activeClass.getEnumConstants()) {
+                    if ("TARGET".equals(((Enum<?>) c).name())) {
+                        cachedTargetConstant = c;
+                        cachedEnrouteActiveClass = activeClass;
+                        break;
+                    }
+                }
+                if (cachedTargetConstant == null) {
+                    enrouteActiveClassLoadFailed = true;
+                    return -1;
                 }
             }
-            if (targetConstant == null) return -1;
+            if (enrouteActiveClassLoadFailed) return -1;
+
+            // Pre-populate cachedGetActiveMethod from the first waypoint's class;
+            // all EnrouteWaypoint instances share the same class so one entry suffices.
+            // Verified against FA 3.0.1: getActive() on EnrouteWaypoint
+            if (cachedGetActiveMethod == null) {
+                cachedGetActiveMethod = wps.get(0).getClass().getMethod("getActive");
+            }
 
             for (int i = 0; i < wps.size(); i++) {
                 Object wp = wps.get(i);
-                // Verified against FA 3.0.1: getActive() on EnrouteWaypoint
-                Method getActive = wp.getClass().getMethod("getActive");
-                Object active = getActive.invoke(wp);
-                if (targetConstant.equals(active)) return i;
+                Object active = cachedGetActiveMethod.invoke(wp);
+                if (cachedTargetConstant.equals(active)) return i;
             }
         } catch (Exception e) {
             LOGGER.warn("[FACompat] getActiveWaypointIndex failed: {}", e.getMessage());
@@ -840,7 +874,9 @@ public class FlightAssistantCompat {
                 if (arrival != null && !isPlanDataDefault(arrival)) {
                     Integer arrX = getPlanCoordinatesX(arrival);
                     Integer arrZ = getPlanCoordinatesZ(arrival);
-                    if (arrX != null && arrZ != null && !isSelectedLateralModeActive()) {
+                    if (arrX != null && arrZ != null
+                            && !isSelectedLateralModeActive()
+                            && getPlanLateralMode() == null) {
                         setCoordsTarget(arrX, arrZ);
                         approachFallbackTriggered = true;
                         LOGGER.info("[FACompat] No lateral mode after enroute — "
@@ -867,6 +903,35 @@ public class FlightAssistantCompat {
         } catch (Exception e) {
             LOGGER.debug("[FACompat] isSelectedLateralModeActive failed: {}", e.getMessage());
             return false;
+        }
+    }
+
+    /**
+     * Returns the lateral mode that {@code FlightPlanComputer.getLateralMode()}
+     * would supply (i.e. FA's plan-driven lateral mode, excluding any manual
+     * {@code selectedLateralMode} override), or {@code null} if the plan
+     * currently provides no lateral guidance.
+     *
+     * <p>This is used by the layer-2 approach fallback in
+     * {@link #tickNavigation()} to distinguish between "FA's plan has an
+     * approach mode ready" (do not override it) and "FA's plan returned
+     * nothing" (safe to fire the fallback).</p>
+     *
+     * <p>Verified against FA 3.0.1: {@code FlightPlanComputer.getLateralMode():
+     * LateralMode?} — a regular function returning a nullable
+     * {@code LateralMode}.</p>
+     */
+    private static Object getPlanLateralMode() {
+        Object plan = getFlightPlanComputer();
+        if (plan == null) return null;
+        try {
+            Method m = findMethodByName(plan.getClass(), "getLateralMode");
+            if (m == null) return null;
+            m.setAccessible(true);
+            return m.invoke(plan);
+        } catch (Exception e) {
+            LOGGER.debug("[FACompat] getPlanLateralMode failed: {}", e.getMessage());
+            return null;
         }
     }
 

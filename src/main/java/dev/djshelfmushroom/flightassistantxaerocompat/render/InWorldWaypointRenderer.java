@@ -167,7 +167,7 @@ public class InWorldWaypointRenderer {
                 Integer elv = FlightAssistantCompat.getPlanElevation(departure);
                 if (wx != null && wz != null) {
                     // elevation is absolute MC world Y; 0 means "not set" (FA default sentinel).
-                    double wy = (elv != null && elv > 0) ? elv : surfaceY(mc.level, wx, wz, camPos.y);
+                    double wy = (elv != null && elv > 0) ? elv : surfaceY(mc.level, wx, wz);
                     renderWaypoint(poseStack, camera, camPos, wx, wy, wz, "DEP", COLOR_DEPARTURE);
                 }
             }
@@ -179,7 +179,7 @@ public class InWorldWaypointRenderer {
                     Integer wz  = FlightAssistantCompat.getPlanCoordinatesZ(wp);
                     Integer alt = FlightAssistantCompat.getEnrouteAltitude(wp);
                     if (wx == null || wz == null) continue;
-                    double wy   = alt != null ? alt : surfaceY(mc.level, wx, wz, camPos.y);
+                    double wy   = alt != null ? alt : surfaceY(mc.level, wx, wz);
                     int color   = (i == activeIdx) ? COLOR_ACTIVE : COLOR_ENROUTE;
                     String label = "WP" + (i + 1) + (alt != null ? "/" + alt : "");
                     renderWaypoint(poseStack, camera, camPos, wx, wy, wz, label, color);
@@ -192,7 +192,7 @@ public class InWorldWaypointRenderer {
                 Integer elv = FlightAssistantCompat.getPlanElevation(arrival);
                 if (wx != null && wz != null) {
                     // elevation is absolute MC world Y; 0 means "not set" (FA default sentinel).
-                    double wy = (elv != null && elv > 0) ? elv : surfaceY(mc.level, wx, wz, camPos.y);
+                    double wy = (elv != null && elv > 0) ? elv : surfaceY(mc.level, wx, wz);
                     renderWaypoint(poseStack, camera, camPos, wx, wy, wz, "ARR", COLOR_ARRIVAL);
                 }
             }
@@ -208,7 +208,7 @@ public class InWorldWaypointRenderer {
                     if (wpDim != null && !wpDim.equals(currentDimension)) continue;
                     // Use stored Y if valid (> 0), otherwise query terrain surface height
                     Integer wy = XaeroCompat.getWaypointY(wp);
-                    double worldY = (wy != null && wy > 0) ? wy : surfaceY(mc.level, wx, wz, camPos.y);
+                    double worldY = (wy != null && wy > 0) ? wy : surfaceY(mc.level, wx, wz);
                     String name = XaeroCompat.getWaypointName(wp);
                     String fallbackLabel = wx + "," + wz;
                     renderWaypoint(poseStack, camera, camPos, wx, worldY, wz,
@@ -395,24 +395,24 @@ public class InWorldWaypointRenderer {
     /**
      * Returns a world-fixed Y coordinate for waypoints without an explicit
      * altitude. Queries {@code MOTION_BLOCKING_NO_LEAVES} at (wx, wz) and
-     * caches the result so the unloaded-chunk fallback is only a transient
-     * one-frame event until the chunk loads, rather than the perpetual steady
-     * state for distant waypoints.
+     * caches the result so the per-frame cost is a single map lookup once the
+     * chunk has loaded.
      *
      * <ul>
      *   <li>Chunk loaded → terrain surface height cached and returned (world-fixed).</li>
-     *   <li>Chunk not yet loaded (height == 0) → return {@code fallbackY}
-     *       <em>without</em> caching, so the query is retried next frame once
-     *       the chunk loads.</li>
+     *   <li>Chunk not yet loaded (heightmap returns 0) → {@code level.getSeaLevel()}
+     *       is returned <em>without</em> caching, so the query is retried next
+     *       frame.  Sea level is a stable world-fixed coordinate and does not
+     *       follow the camera (unlike {@code camPos.y} which would make
+     *       {@code relY = 0} and glue markers to the camera altitude).</li>
      * </ul>
      *
-     * @param level     the current client level
-     * @param wx        waypoint world X (block coordinate)
-     * @param wz        waypoint world Z (block coordinate)
-     * @param fallbackY Y to use when the chunk is not yet loaded (pass {@code camPos.y})
+     * @param level the current client level
+     * @param wx    waypoint world X (block coordinate)
+     * @param wz    waypoint world Z (block coordinate)
      * @return world Y to use as the waypoint's render altitude
      */
-    private double surfaceY(net.minecraft.world.level.Level level, int wx, int wz, double fallbackY) {
+    private double surfaceY(net.minecraft.world.level.Level level, int wx, int wz) {
         long key = ((long) wx << 32) | (wz & 0xFFFFFFFFL);
         Double cached = surfaceYCache.get(key);
         if (cached != null) return cached;
@@ -422,8 +422,10 @@ public class InWorldWaypointRenderer {
             surfaceYCache.put(key, (double) h);
             return h;
         }
-        // Chunk not yet loaded — return fallback without caching so we retry
-        // next frame once the chunk is available.
-        return fallbackY;
+        // Chunk not yet loaded — use sea level as a stable world-fixed placeholder
+        // and retry on the next frame once the chunk is available.
+        // Do NOT use camPos.y here: that makes relY = camPos.y - camPos.y = 0,
+        // locking the marker to the camera's altitude instead of a world position.
+        return level.getSeaLevel();
     }
 }

@@ -137,6 +137,27 @@ public class FlightAssistantCompat {
     private static final String CHAT_PREFIX = "§7[FlightAssistant] §r";
 
     // =========================================================================
+    // Per-tick navigation state
+    // =========================================================================
+
+    /** Sentinel: navigation tracker has not been initialised or autopilot was off. */
+    private static final int UNINITIALIZED_INDEX = Integer.MIN_VALUE;
+
+    /**
+     * Active-waypoint index cached from the previous call to
+     * {@link #tickNavigation()}.  Used to detect when FA's internal plan
+     * advances to a new waypoint (or finishes the enroute sequence entirely).
+     */
+    private static int lastTickActiveWaypointIndex = UNINITIALIZED_INDEX;
+
+    /**
+     * {@code true} once the one-shot approach fallback has been fired for the
+     * current "all enroute done" segment, preventing repeated
+     * {@code setCoordsTarget} calls every tick.
+     */
+    private static boolean approachFallbackTriggered = false;
+
+    // =========================================================================
     // Computer access helpers
     // =========================================================================
 
@@ -747,6 +768,104 @@ public class FlightAssistantCompat {
             }
         } catch (Exception e) {
             LOGGER.warn("[FACompat] setArrivalWaypoint failed: {}", e.getMessage());
+            return false;
+        }
+    }
+
+    // =========================================================================
+    // Per-tick navigation management
+    // =========================================================================
+
+    /**
+     * Monitors the flight-plan navigation state and corrects the autopilot's
+     * lateral mode when FA's internal plan advances past the last enroute
+     * waypoint into the arrival/approach phase.
+     *
+     * <p>Call this once per client tick while FlightAssistant is loaded.</p>
+     *
+     * <h4>Problem addressed</h4>
+     * <p>When the player uses <em>Fly Here</em> (or <em>[FA] Set as COORDS
+     * Target</em>) to navigate toward an enroute waypoint,
+     * {@link #setCoordsTarget} writes a static
+     * {@code DirectCoordinatesLateralMode} into
+     * {@code AutoFlightComputer.selectedLateralMode}.  FA resolves the active
+     * lateral mode as {@code selectedLateralMode ?: plan.getLateralMode()}, so
+     * this override persists even after FA's own plan marks the waypoint as
+     * passed and tries to transition to the arrival approach.  The result is
+     * that the autopilot keeps flying toward — and past — the already-passed
+     * enroute waypoint instead of initiating the approach.</p>
+     *
+     * <h4>Fix — two layers</h4>
+     * <ol>
+     *   <li><b>Clear on plan advance</b> — the last active-waypoint index is
+     *       cached each tick; whenever it changes (FA advanced the plan),
+     *       {@link #clearSelectedLateralMode()} is called so FA's own sequencer
+     *       can take over for the new phase.</li>
+     *   <li><b>One-shot approach fallback</b> — as a safety net, when all
+     *       enroute waypoints are done, arrival data is present, and no lateral
+     *       mode is currently active (FA's plan returned {@code null}), a
+     *       direct-to-arrival COORDS target is set once so the plane still
+     *       heads to the destination.</li>
+     * </ol>
+     */
+    public static void tickNavigation() {
+        if (!isAutopilotEngaged()) {
+            lastTickActiveWaypointIndex = UNINITIALIZED_INDEX;
+            approachFallbackTriggered = false;
+            return;
+        }
+
+        int currentActiveIdx = getActiveWaypointIndex();
+
+        // Layer 1 — detect plan advancement and clear any stale COORDS override.
+        if (lastTickActiveWaypointIndex != UNINITIALIZED_INDEX
+                && currentActiveIdx != lastTickActiveWaypointIndex) {
+            clearSelectedLateralMode();
+            approachFallbackTriggered = false;
+            LOGGER.debug("[FACompat] Plan advanced ({} → {}): cleared lateral-mode override.",
+                    lastTickActiveWaypointIndex, currentActiveIdx);
+        }
+
+        lastTickActiveWaypointIndex = currentActiveIdx;
+
+        // Layer 2 — one-shot approach fallback.
+        // If all enroute waypoints have been passed (no active TARGET) but
+        // arrival data is present, and no lateral mode is currently selected
+        // (FA's plan mode returned null), explicitly fly toward the arrival so
+        // the plane does not just maintain its last heading.
+        if (!approachFallbackTriggered && currentActiveIdx == -1) {
+            List<Object> enroute = getEnrouteWaypoints();
+            if (enroute != null && !enroute.isEmpty()) {
+                Object arrival = getArrivalData();
+                if (arrival != null && !isPlanDataDefault(arrival)) {
+                    Integer arrX = getPlanCoordinatesX(arrival);
+                    Integer arrZ = getPlanCoordinatesZ(arrival);
+                    if (arrX != null && arrZ != null && !isSelectedLateralModeActive()) {
+                        setCoordsTarget(arrX, arrZ);
+                        approachFallbackTriggered = true;
+                        LOGGER.info("[FACompat] No lateral mode after enroute — "
+                                + "initiated fallback approach to arrival ({}, {}).", arrX, arrZ);
+                        sendChatMessage("§eApproach to arrival initiated.");
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Returns {@code true} if {@code AutoFlightComputer.selectedLateralMode}
+     * is currently non-{@code null} (i.e. a manual COORDS override is active).
+     */
+    private static boolean isSelectedLateralModeActive() {
+        Object afc = getAutoFlightComputer();
+        if (afc == null) return false;
+        try {
+            Method getter = findMethodByName(afc.getClass(), "getSelectedLateralMode");
+            if (getter == null) return false;
+            getter.setAccessible(true);
+            return getter.invoke(afc) != null;
+        } catch (Exception e) {
+            LOGGER.debug("[FACompat] isSelectedLateralModeActive failed: {}", e.getMessage());
             return false;
         }
     }

@@ -37,19 +37,18 @@ minecraft {
 
 sourceSets.main.resources { srcDir 'src/generated/resources' }
 
+def localXaeroJar = file("libs/XaeroWorldMap-${project.xaero_worldmap_version}.jar")
+def localFAJar = file("libs/FlightAssistant-${project.flightassistant_version}.jar")
+
 repositories {
-    // Xaero's Maven — only needed when no local jar is present in libs/
-    if (!file("libs/XaeroWorldMap-${project.xaero_worldmap_version}.jar").exists()) {
-        maven {
-            name = "Xaero's Maven"
-            url = "https://maven.xeadmc.net/"
-        }
-    }
-    // Modrinth Maven — only needed when no local jar is present in libs/
-    if (!file("libs/FlightAssistant-${project.flightassistant_version}.jar").exists()) {
+    // Modrinth Maven — only needed when at least one remote fallback is required.
+    if (!localXaeroJar.exists() || !localFAJar.exists()) {
         maven {
             name = "Modrinth Maven"
             url = "https://api.modrinth.com/maven"
+            content {
+                includeGroup "maven.modrinth"
+            }
         }
     }
     // Local libs folder for any manual jar dependencies
@@ -61,16 +60,16 @@ dependencies {
 
     // Xaero's World Map — uses local jar in libs/ if present, Xaero Maven otherwise.
     // To use a local jar, place XaeroWorldMap-${xaero_worldmap_version}.jar in libs/.
-    def localXaeroJar = file("libs/XaeroWorldMap-${project.xaero_worldmap_version}.jar")
     if (localXaeroJar.exists()) {
         compileOnly fg.deobf(files(localXaeroJar))
     } else {
-        compileOnly fg.deobf("xaero.public.maven:XaeroWorldMap:${project.xaero_worldmap_version}")
+        compileOnly fg.deobf("maven.modrinth:xaeros-world-map:${project.xaero_worldmap_modrinth_version}") {
+            transitive = false
+        }
     }
 
     // FlightAssistant — uses local jar in libs/ if present, Modrinth Maven otherwise.
     // To use a local jar, place FlightAssistant-${flightassistant_version}.jar in libs/.
-    def localFAJar = file("libs/FlightAssistant-${project.flightassistant_version}.jar")
     if (localFAJar.exists()) {
         compileOnly fg.deobf(files(localFAJar))
     } else {

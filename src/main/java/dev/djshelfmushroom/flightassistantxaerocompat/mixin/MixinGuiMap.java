@@ -5,6 +5,7 @@ import dev.djshelfmushroom.flightassistantxaerocompat.compat.FlightAssistantComp
 import dev.djshelfmushroom.flightassistantxaerocompat.gui.WaypointAltitudeScreen;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.world.level.levelgen.Heightmap;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.injection.At;
@@ -13,18 +14,21 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 import xaero.map.gui.dropdown.rightclick.RightClickOption;
 
 import java.util.ArrayList;
+import java.util.Locale;
 
 /**
  * Mixin on {@code xaero.map.gui.GuiMap} to inject FlightAssistant context-menu
  * entries into Xaero's World Map right-click dropdown.
  *
- * <p>Three entries are added whenever FlightAssistant is loaded:</p>
+ * <p>Five entries are added whenever FlightAssistant is loaded:</p>
  * <ol>
  *   <li><b>Fly Here (FlightAssistant)</b> — sets COORDS target to the right-clicked
  *       X/Z position.</li>
  *   <li><b>[FA] Set as COORDS Target</b> — same action in the FA section.</li>
  *   <li><b>[FA] Add to Flight Plan (Enroute)</b> — opens
  *       {@link WaypointAltitudeScreen}.</li>
+ *   <li><b>[FA] Set as Departure</b> — sets the flight plan departure point.</li>
+ *   <li><b>[FA] Set as Arrival</b> — sets the flight plan arrival point.</li>
  * </ol>
  *
  * <p>All coordinates come from the Xaero-managed {@code rightClickX}/{@code rightClickZ}
@@ -118,6 +122,54 @@ public abstract class MixinGuiMap {
                         clickX, clickZ, "X:" + clickX + " Z:" + clickZ));
             }
         });
+
+        // ---- "[FA] Set as Departure" ----
+        options.add(new RightClickOption("[FA] Set as Departure", options.size(), self) {
+            @Override
+            public void onAction(Screen screen) {
+                int elevation = terrainElevation(clickX, clickZ);
+                boolean ok = FlightAssistantCompat.setDepartureWaypoint(clickX, clickZ, elevation);
+                if (ok) {
+                    FlightAssistantCompat.sendChatMessage(
+                            String.format(Locale.ROOT, "§fDeparture set to X: %d, Z: %d (elev: %d)", clickX, clickZ, elevation));
+                } else {
+                    FlightAssistantCompat.sendChatMessage(
+                            "§cFailed to set departure — check logs.");
+                }
+            }
+        });
+
+        // ---- "[FA] Set as Arrival" ----
+        options.add(new RightClickOption("[FA] Set as Arrival", options.size(), self) {
+            @Override
+            public void onAction(Screen screen) {
+                int elevation = terrainElevation(clickX, clickZ);
+                boolean ok = FlightAssistantCompat.setArrivalWaypoint(clickX, clickZ, elevation);
+                if (ok) {
+                    FlightAssistantCompat.sendChatMessage(
+                            String.format(Locale.ROOT, "§fArrival set to X: %d, Z: %d (elev: %d)", clickX, clickZ, elevation));
+                } else {
+                    FlightAssistantCompat.sendChatMessage(
+                            "§cFailed to set arrival — check logs.");
+                }
+            }
+        });
+    }
+
+    /**
+     * Returns the absolute MC world Y coordinate of the terrain surface at the
+     * given block X/Z, using the {@code WORLD_SURFACE} heightmap.
+     * {@code WORLD_SURFACE} uses {@code Heightmap.Usage.CLIENT_SYNC} and is
+     * always present in chunk network packets.  {@code MOTION_BLOCKING_NO_LEAVES}
+     * uses {@code Heightmap.Usage.LIVE} and is never sent to the client, so
+     * {@code getHeight()} would always return 0 regardless of chunk load state.
+     * Returns 0 when the chunk is not loaded; callers treat 0 as "not set" and
+     * fall back to other height sources at render time.
+     */
+    private static int terrainElevation(int x, int z) {
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.level == null) return 0;
+        return mc.level.getHeight(Heightmap.Types.WORLD_SURFACE, x, z);
     }
 }
 

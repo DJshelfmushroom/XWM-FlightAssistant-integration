@@ -1,0 +1,446 @@
+package dev.djshelfmushroom.flightassistantxaerocompat.render;
+
+import com.mojang.blaze3d.systems.RenderSystem;
+import com.mojang.blaze3d.vertex.*;
+import dev.djshelfmushroom.flightassistantxaerocompat.FlightAssistantXaeroCompat;
+import dev.djshelfmushroom.flightassistantxaerocompat.compat.FlightAssistantCompat;
+import dev.djshelfmushroom.flightassistantxaerocompat.compat.XaeroCompat;
+import net.minecraft.client.Camera;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.Font;
+import net.minecraft.client.renderer.GameRenderer;
+import net.minecraft.client.renderer.MultiBufferSource;
+import net.minecraft.world.level.levelgen.Heightmap;
+import net.minecraft.world.phys.Vec3;
+import net.minecraftforge.client.event.RenderLevelStageEvent;
+import net.minecraftforge.eventbus.api.SubscribeEvent;
+import org.joml.Matrix4f;
+
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+
+/**
+ * Renders FlightAssistant flight-plan waypoints as 3D in-world markers while
+ * the player is flying, giving real-time spatial awareness of the active route.
+ *
+ * <p>Waypoints are rendered during
+ * {@link RenderLevelStageEvent.Stage#AFTER_TRANSLUCENT_BLOCKS} so they appear
+ * on top of most world geometry but beneath the HUD. Markers are rendered
+ * without depth-testing so they remain visible through terrain.</p>
+ *
+ * <h3>Coordinate-space note</h3>
+ * <p>The {@code poseStack} supplied by {@link RenderLevelStageEvent} already has
+ * the camera view transform {@code R(Q⁻¹)} applied by
+ * {@code GameRenderer.renderLevel()} before the level renderer is called.
+ * Translating by {@code (wx − camX, wy − camY, wz − camZ)} in this space
+ * correctly places a vertex at the world-fixed waypoint position: the view
+ * transform then rotates it into camera/screen space as expected.
+ * Applying an additional rotation undo here would double the inverse rotation
+ * to {@code R(Q⁻²)}, making markers drift with camera look direction.
+ * Billboard labels apply {@code camera.rotation()} individually to undo the
+ * view rotation and align their local axes with screen axes.</p>
+ *
+ * <h3>Visual elements (per waypoint)</h3>
+ * <ul>
+ *   <li>A wire-frame box outline at the waypoint's target altitude (or airport
+ *       elevation for departure/arrival — stored as absolute MC world Y by FA;
+ *       terrain surface height is used when elevation is zero / the chunk is
+ *       unloaded).</li>
+ *   <li>A billboard text label floating above the box showing the waypoint
+ *       identifier, target altitude (enroute only), and the horizontal
+ *       distance from the player.</li>
+ * </ul>
+ *
+ * <h3>Colour coding</h3>
+ * <ul>
+ *   <li><b>Departure</b> — green</li>
+ *   <li><b>Enroute</b> — cyan</li>
+ *   <li><b>Active enroute waypoint</b> — bright yellow</li>
+ *   <li><b>Arrival</b> — red</li>
+ *   <li><b>Xaero World Map saved waypoint</b> — white</li>
+ * </ul>
+ *
+ * <p>Waypoints further than 4096 blocks (horizontal) are culled.</p>
+ */
+public class InWorldWaypointRenderer {
+
+    /** Maximum horizontal range (blocks) at which in-world markers are rendered. */
+    private static final double MAX_DIST = 4096.0;
+
+    /** Half-size of the wire-frame box, in blocks. */
+    private static final float BOX_HALF = 0.4f;
+
+    // Colours (0xAARRGGBB)
+    private static final int COLOR_DEPARTURE = 0xFF00BB00;
+    private static final int COLOR_ENROUTE   = 0xFF00BBBB;
+    private static final int COLOR_ACTIVE    = 0xFFFFFF00;
+    private static final int COLOR_ARRIVAL   = 0xFFBB0000;
+    /** White — used for Xaero World Map saved waypoints. */
+    private static final int COLOR_XWM       = 0xFFFFFFFF;
+
+    /**
+     * Shared label BufferSource — allocated once and reused every frame to
+     * avoid per-frame GC pressure while a flight plan is active.
+     */
+    private final MultiBufferSource.BufferSource labelBuf =
+            MultiBufferSource.immediate(new BufferBuilder(1536));
+
+    /**
+     * Cache of terrain-surface Y values keyed by packed (X, Z) block
+     * coordinate.  Entries are written once the containing chunk is loaded
+     * (i.e. {@link net.minecraft.world.level.Level#getHeight} returns > 0)
+     * and reused on every subsequent frame, making the unloaded-chunk
+     * fallback a transient one-time event rather than the steady state for
+     * distant waypoints.
+     *
+     * <p>The cache is per-renderer-instance (i.e. per game session).  It is
+     * intentionally <em>not</em> cleared on chunk-unload events: the
+     * heightmap value for a loaded chunk is stable for the lifetime of the
+     * world and does not need to be re-queried.</p>
+     */
+    private final Map<Long, Double> surfaceYCache = new HashMap<>();
+
+    // =========================================================================
+    // Event handler
+    // =========================================================================
+
+    /**
+     * Main entry point — called every rendered frame during level rendering.
+     *
+     * @param event the render-level stage event
+     */
+    @SubscribeEvent
+    public void onRenderLevelStage(RenderLevelStageEvent event) {
+        if (event.getStage() != RenderLevelStageEvent.Stage.AFTER_TRANSLUCENT_BLOCKS) return;
+        if (!FlightAssistantXaeroCompat.flightAssistantPresent
+                && !FlightAssistantXaeroCompat.xaeroPresent) return;
+
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.level == null || mc.player == null) return;
+
+        // Guard: only read FA data if FA is present — otherwise getComputerHost() logs
+        // a ClassNotFoundException WARN every frame, causing severe log spam.
+        Object departure     = null;
+        Object arrival       = null;
+        List<Object> enroute = Collections.emptyList();
+        int activeIdx        = -1;
+        if (FlightAssistantXaeroCompat.flightAssistantPresent) {
+            departure = FlightAssistantCompat.getDepartureData();
+            arrival   = FlightAssistantCompat.getArrivalData();
+            enroute   = FlightAssistantCompat.getEnrouteWaypoints();
+            activeIdx = FlightAssistantCompat.getActiveWaypointIndex();
+        }
+
+        boolean hasDep = departure != null && !FlightAssistantCompat.isPlanDataDefault(departure);
+        boolean hasArr = arrival   != null && !FlightAssistantCompat.isPlanDataDefault(arrival);
+        boolean hasEnr = enroute   != null && !enroute.isEmpty();
+
+        // XWM waypoints — only loaded when Xaero is present
+        List<Object> xwmWaypoints = Collections.emptyList();
+        if (FlightAssistantXaeroCompat.xaeroPresent) {
+            xwmWaypoints = XaeroCompat.getCurrentDimensionWaypoints();
+        }
+        boolean hasXwm = !xwmWaypoints.isEmpty();
+
+        if (!hasDep && !hasArr && !hasEnr && !hasXwm) return;
+
+        PoseStack poseStack = event.getPoseStack();
+        Camera camera       = event.getCamera();
+        Vec3 camPos         = camera.getPosition();
+
+        // The RenderLevelStageEvent pose stack already has the camera VIEW transform
+        // (R(Q⁻¹)) applied by GameRenderer before LevelRenderer is called.
+        // Translating by (world − camera) in this space gives world-fixed positions.
+        // DO NOT apply an additional rotation here — that would double the inverse
+        // rotation to R(Q⁻²) and make markers drift with camera look direction.
+        // Billboard labels apply camera.rotation() individually to undo the view
+        // transform and face the text toward the camera (screen space axes).
+        poseStack.pushPose();
+
+        try {
+            if (hasDep) {
+                Integer wx = FlightAssistantCompat.getPlanCoordinatesX(departure);
+                Integer wz = FlightAssistantCompat.getPlanCoordinatesZ(departure);
+                Integer elv = FlightAssistantCompat.getPlanElevation(departure);
+                if (wx != null && wz != null) {
+                    // elevation is absolute MC world Y; 0 means "not set" (FA default sentinel).
+                    double wy = (elv != null && elv > 0) ? elv : surfaceY(mc.level, wx, wz);
+                    renderWaypoint(poseStack, camera, camPos, wx, wy, wz, "DEP", COLOR_DEPARTURE);
+                }
+            }
+
+            if (hasEnr) {
+                for (int i = 0; i < enroute.size(); i++) {
+                    Object wp   = enroute.get(i);
+                    Integer wx  = FlightAssistantCompat.getPlanCoordinatesX(wp);
+                    Integer wz  = FlightAssistantCompat.getPlanCoordinatesZ(wp);
+                    Integer alt = FlightAssistantCompat.getEnrouteAltitude(wp);
+                    if (wx == null || wz == null) continue;
+                    double wy   = alt != null ? alt : surfaceY(mc.level, wx, wz);
+                    int color   = (i == activeIdx) ? COLOR_ACTIVE : COLOR_ENROUTE;
+                    String label = "WP" + (i + 1) + (alt != null ? "/" + alt : "");
+                    renderWaypoint(poseStack, camera, camPos, wx, wy, wz, label, color);
+                }
+            }
+
+            if (hasArr) {
+                Integer wx = FlightAssistantCompat.getPlanCoordinatesX(arrival);
+                Integer wz = FlightAssistantCompat.getPlanCoordinatesZ(arrival);
+                Integer elv = FlightAssistantCompat.getPlanElevation(arrival);
+                if (wx != null && wz != null) {
+                    // elevation is absolute MC world Y; 0 means "not set" (FA default sentinel).
+                    double wy = (elv != null && elv > 0) ? elv : surfaceY(mc.level, wx, wz);
+                    renderWaypoint(poseStack, camera, camPos, wx, wy, wz, "ARR", COLOR_ARRIVAL);
+                }
+            }
+
+            if (hasXwm) {
+                String currentDimension = mc.level.dimension().location().toString();
+                for (Object wp : xwmWaypoints) {
+                    Integer wx = XaeroCompat.getWaypointX(wp);
+                    Integer wz = XaeroCompat.getWaypointZ(wp);
+                    if (wx == null || wz == null) continue;
+                    // Filter to current dimension; include if dimension is unknown
+                    String wpDim = XaeroCompat.getWaypointDimension(wp);
+                    if (wpDim != null && !wpDim.equals(currentDimension)) continue;
+                    // Use stored Y if valid (> 0), otherwise query terrain surface height
+                    Integer wy = XaeroCompat.getWaypointY(wp);
+                    double worldY = (wy != null && wy > 0) ? wy : surfaceY(mc.level, wx, wz);
+                    String name = XaeroCompat.getWaypointName(wp);
+                    String fallbackLabel = wx + "," + wz;
+                    renderWaypoint(poseStack, camera, camPos, wx, worldY, wz,
+                            (name != null && !name.isEmpty()) ? name : fallbackLabel, COLOR_XWM);
+                }
+            }
+        } catch (Exception e) {
+            FlightAssistantXaeroCompat.LOGGER.warn(
+                    "[FA-Xaero] InWorldWaypointRenderer failed", e);
+        } finally {
+            try { labelBuf.endBatch(); } catch (Exception e) {
+                FlightAssistantXaeroCompat.LOGGER.debug(
+                        "[FA-Xaero] labelBuf.endBatch() failed", e);
+            }
+            poseStack.popPose();
+        }
+    }
+
+    // =========================================================================
+    // Per-waypoint rendering
+    // =========================================================================
+
+    /**
+     * Renders the box and label for a single waypoint.
+     * The poseStack must already have the camera rotation undone (i.e. be in
+     * world-aligned space) when this method is called.
+     *
+     * @param poseStack camera-rotation-undone pose stack
+     * @param camera    active camera (for billboard orientation)
+     * @param camPos    camera world position
+     * @param wx        waypoint world X
+     * @param wy        waypoint world Y (target altitude)
+     * @param wz        waypoint world Z
+     * @param label     text to display (e.g. "WP1/250")
+     * @param argbColor 0xAARRGGBB colour for this waypoint type
+     */
+    private void renderWaypoint(PoseStack poseStack, Camera camera, Vec3 camPos,
+                                int wx, double wy, int wz,
+                                String label, int argbColor) {
+        double relX = wx - camPos.x;
+        double relY = wy - camPos.y;
+        double relZ = wz - camPos.z;
+
+        // Cull by horizontal distance
+        double horizDistSq = relX * relX + relZ * relZ;
+        if (horizDistSq > MAX_DIST * MAX_DIST) return;
+
+        float r = ((argbColor >> 16) & 0xFF) / 255f;
+        float g = ((argbColor >>  8) & 0xFF) / 255f;
+        float b = ( argbColor        & 0xFF) / 255f;
+
+        // Draw wire-frame box at the waypoint position
+        poseStack.pushPose();
+        poseStack.translate(relX, relY, relZ);
+        drawBox(poseStack, BOX_HALF, r, g, b);
+        poseStack.popPose();
+
+        // Draw billboard label above the box
+        double horizDist = Math.sqrt(horizDistSq);
+        String fullLabel = label + "  " + formatDist(horizDist);
+        drawLabel(poseStack, camera, relX, relY + BOX_HALF + 0.6, relZ, fullLabel, argbColor);
+    }
+
+    // =========================================================================
+    // Rendering primitives
+    // =========================================================================
+
+    /**
+     * Draws a wire-frame axis-aligned box centred at the current pose origin.
+     * Depth testing is disabled so the outline is visible through terrain.
+     *
+     * @param poseStack pose stack (translated to the box centre)
+     * @param half      half-size of the box (all axes)
+     * @param r         red component [0,1]
+     * @param g         green component [0,1]
+     * @param b         blue component [0,1]
+     */
+    private static void drawBox(PoseStack poseStack, float half,
+                                 float r, float g, float b) {
+        RenderSystem.setShader(GameRenderer::getPositionColorShader);
+        RenderSystem.disableDepthTest();
+        RenderSystem.enableBlend();
+        RenderSystem.defaultBlendFunc();
+        RenderSystem.lineWidth(2.0f);
+
+        Matrix4f mat = poseStack.last().pose();
+        Tesselator tes = Tesselator.getInstance();
+        BufferBuilder buf = tes.getBuilder();
+        buf.begin(VertexFormat.Mode.DEBUG_LINES, DefaultVertexFormat.POSITION_COLOR);
+
+        float a = 1.0f;
+        // Bottom face
+        line(buf, mat, -half, -half, -half,  half, -half, -half, r, g, b, a);
+        line(buf, mat,  half, -half, -half,  half, -half,  half, r, g, b, a);
+        line(buf, mat,  half, -half,  half, -half, -half,  half, r, g, b, a);
+        line(buf, mat, -half, -half,  half, -half, -half, -half, r, g, b, a);
+        // Top face
+        line(buf, mat, -half,  half, -half,  half,  half, -half, r, g, b, a);
+        line(buf, mat,  half,  half, -half,  half,  half,  half, r, g, b, a);
+        line(buf, mat,  half,  half,  half, -half,  half,  half, r, g, b, a);
+        line(buf, mat, -half,  half,  half, -half,  half, -half, r, g, b, a);
+        // Vertical edges
+        line(buf, mat, -half, -half, -half, -half,  half, -half, r, g, b, a);
+        line(buf, mat,  half, -half, -half,  half,  half, -half, r, g, b, a);
+        line(buf, mat,  half, -half,  half,  half,  half,  half, r, g, b, a);
+        line(buf, mat, -half, -half,  half, -half,  half,  half, r, g, b, a);
+
+        tes.end();
+        RenderSystem.enableDepthTest();
+        RenderSystem.disableBlend();
+        RenderSystem.lineWidth(1.0f);
+    }
+
+    /**
+     * Draws a camera-facing (billboard) text label at the given camera-relative
+     * position. Assumes the poseStack is already in world-aligned space (camera
+     * rotation undone); re-applies camera rotation for the billboard effect.
+     *
+     * @param poseStack world-aligned pose stack
+     * @param camera    active camera (used for billboard rotation)
+     * @param relX      camera-relative X of the label anchor
+     * @param relY      camera-relative Y of the label anchor
+     * @param relZ      camera-relative Z of the label anchor
+     * @param text      text to render
+     * @param argbColor ARGB colour for the text
+     */
+    private void drawLabel(PoseStack poseStack, Camera camera,
+                           double relX, double relY, double relZ,
+                           String text, int argbColor) {
+        Minecraft mc = Minecraft.getInstance();
+        Font font = mc.font;
+
+        poseStack.pushPose();
+        poseStack.translate(relX, relY, relZ);
+
+        // Re-apply camera rotation so the label faces the camera (billboard).
+        // The caller has already undone camera rotation to reach world-aligned space;
+        // applying it here rotates the label's local axes to match the screen.
+        poseStack.mulPose(camera.rotation());
+
+        // Scale to a readable world-space size
+        // Minecraft GUI font is ~8px; 0.025f makes text ~0.2 blocks tall
+        float scale = 0.025f;
+        poseStack.scale(-scale, -scale, scale);
+
+        float textX = -font.width(text) / 2.0f;
+        int textColor = argbColor | 0xFF000000;
+
+        font.drawInBatch(
+                text,
+                textX, 0f,
+                textColor,
+                false,
+                poseStack.last().pose(),
+                labelBuf,
+                Font.DisplayMode.SEE_THROUGH,
+                0x55000000, // semi-transparent dark background
+                0xF000F0    // full-bright packed light
+        );
+
+        poseStack.popPose();
+    }
+
+    // =========================================================================
+    // Helpers
+    // =========================================================================
+
+    private static void line(BufferBuilder buf, Matrix4f mat,
+                              float x1, float y1, float z1,
+                              float x2, float y2, float z2,
+                              float r, float g, float b, float a) {
+        buf.vertex(mat, x1, y1, z1).color(r, g, b, a).endVertex();
+        buf.vertex(mat, x2, y2, z2).color(r, g, b, a).endVertex();
+    }
+
+    /** Formats a horizontal block distance as a compact string (e.g. "512m" or "1.5km"). */
+    private static String formatDist(double dist) {
+        if (dist >= 1000.0) {
+            return String.format(Locale.ROOT, "%.1fkm", dist / 1000.0);
+        }
+        return String.format(Locale.ROOT, "%.0fm", dist);
+    }
+
+    /**
+     * Returns a world-fixed Y coordinate for waypoints without an explicit
+     * altitude. Queries the {@code WORLD_SURFACE} heightmap at (wx, wz) and
+     * caches the result so the per-frame cost is a single map lookup once the
+     * chunk has loaded.
+     *
+     * <p>{@code WORLD_SURFACE} uses {@code Heightmap.Usage.CLIENT_SYNC} so it
+     * is always included in chunk network packets and is reliable on the client.
+     * {@code MOTION_BLOCKING_NO_LEAVES} uses {@code Heightmap.Usage.LIVE} and
+     * is <em>never</em> included in chunk packets, making it always return 0 on
+     * the client regardless of chunk load state.</p>
+     *
+     * <ul>
+     *   <li>Chunk loaded → terrain surface height cached and returned (world-fixed).</li>
+     *   <li>Chunk not yet loaded ({@code getHeight} returns 0) →
+     *       {@code level.getSeaLevel()} is returned <em>without</em> caching, so
+     *       the query is retried next frame.  Sea level is a stable world-fixed
+     *       coordinate and does not follow the camera (unlike {@code camPos.y}
+     *       which would make {@code relY = 0} and glue markers to the camera
+     *       altitude).</li>
+     * </ul>
+     *
+     * @param level the current client level
+     * @param wx    waypoint world X (block coordinate)
+     * @param wz    waypoint world Z (block coordinate)
+     * @return world Y to use as the waypoint's render altitude
+     */
+    private double surfaceY(net.minecraft.world.level.Level level, int wx, int wz) {
+        long key = ((long) wx << 32) | (wz & 0xFFFFFFFFL);
+        Double cached = surfaceYCache.get(key);
+        if (cached != null) return cached;
+
+        // WORLD_SURFACE uses Heightmap.Usage.CLIENT_SYNC and is always included in
+        // chunk network packets.  MOTION_BLOCKING_NO_LEAVES uses Usage.LIVE and is
+        // NEVER sent to the client, so getHeight() for that type always returns 0
+        // regardless of chunk load state — every query would fall through to the
+        // fallback, making markers follow the camera instead of staying world-fixed.
+        int h = level.getHeight(Heightmap.Types.WORLD_SURFACE, wx, wz);
+        // getHeight() returns 0 specifically when the chunk is not loaded
+        // (the hasChunk guard in Level.getHeight returns 0 for absent chunks).
+        // For loaded chunks, the value is always > level.getMinBuildHeight() (≥ 1).
+        if (h > 0) {
+            surfaceYCache.put(key, (double) h);
+            return h;
+        }
+        // Chunk not yet loaded — use sea level as a stable world-fixed placeholder
+        // and retry on the next frame once the chunk is available.
+        // Do NOT use camPos.y here: that makes relY = camPos.y - camPos.y = 0,
+        // locking the marker to the camera's altitude instead of a world position.
+        return level.getSeaLevel();
+    }
+}

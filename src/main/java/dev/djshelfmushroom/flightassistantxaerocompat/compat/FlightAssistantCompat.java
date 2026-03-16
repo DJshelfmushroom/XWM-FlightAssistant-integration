@@ -80,6 +80,49 @@ public class FlightAssistantCompat {
     private static final String CLASS_ENROUTE_ACTIVE =
             "ru.octol1ttle.flightassistant.impl.computer.autoflight.FlightPlanComputer$EnrouteWaypoint$Active";
 
+    /**
+     * Departure airport data — {@code data class DepartureData(coordinatesX, coordinatesZ,
+     * elevation, takeoffThrust)}.
+     * <p>Verified against FA 3.0.1: FlightPlanComputer.kt nested data class.</p>
+     */
+    private static final String CLASS_DEPARTURE_DATA =
+            "ru.octol1ttle.flightassistant.impl.computer.autoflight.FlightPlanComputer$DepartureData";
+
+    /**
+     * Arrival airport data — {@code data class ArrivalData(coordinatesX, coordinatesZ,
+     * elevation, landingThrust, minimums, minimumsType, goAroundAltitude,
+     * approachReEntryWaypointIndex)}.
+     * <p>Verified against FA 3.0.1: FlightPlanComputer.kt nested data class.</p>
+     */
+    private static final String CLASS_ARRIVAL_DATA =
+            "ru.octol1ttle.flightassistant.impl.computer.autoflight.FlightPlanComputer$ArrivalData";
+
+    /**
+     * MinimumsType enum nested inside {@code ArrivalData}.
+     * <p>Verified against FA 3.0.1: FlightPlanComputer.kt</p>
+     */
+    private static final String CLASS_MINIMUMS_TYPE =
+            "ru.octol1ttle.flightassistant.impl.computer.autoflight.FlightPlanComputer$ArrivalData$MinimumsType";
+
+    /**
+     * FA 3.0.1 FMS departure screen — has a companion object with a static {@code state}
+     * field and a {@code reload(DepartureData)} method to sync it with live plan data.
+     */
+    private static final String CLASS_DEPARTURE_SCREEN =
+            "ru.octol1ttle.flightassistant.screen.fms.departure.DepartureScreen";
+
+    /**
+     * FA 3.0.1 FMS arrival screen — companion {@code reload(ArrivalData)}.
+     */
+    private static final String CLASS_ARRIVAL_SCREEN =
+            "ru.octol1ttle.flightassistant.screen.fms.arrival.ArrivalScreen";
+
+    /**
+     * FA 3.0.1 FMS enroute screen — companion {@code reload(List<EnrouteWaypoint>)}.
+     */
+    private static final String CLASS_ENROUTE_SCREEN =
+            "ru.octol1ttle.flightassistant.screen.fms.enroute.EnrouteScreen";
+
     // ResourceLocation IDs for each computer (verified against FA 3.0.1)
     // AutoFlightComputer.ID = FlightAssistant.id("auto_flight")
     private static final ResourceLocation ID_AUTO_FLIGHT =
@@ -143,7 +186,9 @@ public class FlightAssistantCompat {
      * FlightAssistant.id("auto_flight")}</p>
      */
     public static Object getAutoFlightComputer() {
-        return getComputer(ID_AUTO_FLIGHT);
+        Object computer = getComputer(ID_AUTO_FLIGHT);
+        if (computer != null) return computer;
+        return getComputerByHostGetter("getAutoflight");
     }
 
     /**
@@ -153,7 +198,25 @@ public class FlightAssistantCompat {
      * FlightAssistant.id("flight_plan")}</p>
      */
     public static Object getFlightPlanComputer() {
-        return getComputer(ID_FLIGHT_PLAN);
+        Object computer = getComputer(ID_FLIGHT_PLAN);
+        if (computer != null) return computer;
+        return getComputerByHostGetter("getPlan");
+    }
+
+    /**
+     * Fallback for cases where lookup by ResourceLocation fails:
+     * uses direct ComputerHost getters (e.g. getAutoflight/getPlan).
+     */
+    private static Object getComputerByHostGetter(String getterName) {
+        Object host = getComputerHost();
+        if (host == null) return null;
+        try {
+            Method getter = host.getClass().getMethod(getterName);
+            return getter.invoke(host);
+        } catch (Exception e) {
+            LOGGER.warn("[FACompat] {} fallback failed: {}", getterName, e.getMessage());
+            return null;
+        }
     }
 
     // =========================================================================
@@ -181,11 +244,10 @@ public class FlightAssistantCompat {
     }
 
     /**
-     * Sets FlightAssistant's lateral autopilot mode to {@code COORDS} and
-     * updates the COORDS target to the given X/Z position.
+     * Sets FlightAssistant's lateral mode to {@code COORDS}, updates the
+     * target to the given X/Z position, and engages autopilot.
      *
-     * <p>Only the lateral mode is modified. Vertical and thrust modes are left
-     * completely untouched.</p>
+     * <p>Vertical and thrust modes are left completely untouched.</p>
      *
      * <p>Verified against FA 3.0.1:
      * <ul>
@@ -193,6 +255,8 @@ public class FlightAssistantCompat {
      *       JVM setter {@code setSelectedLateralMode(LateralMode)}</li>
      *   <li>{@code DirectCoordinatesLateralMode(targetX: Int, targetZ: Int,
      *       textOverride: Component?)} — primary constructor</li>
+     *   <li>{@code AutoFlightComputer.setAutoPilot(Boolean, Boolean?)} —
+     *       engages autopilot so heading control is actually applied</li>
      * </ul>
      * </p>
      *
@@ -224,7 +288,7 @@ public class FlightAssistantCompat {
             }
             setter.setAccessible(true);
             setter.invoke(afc, modeInstance);
-            return true;
+            return enableAutoPilot(afc);
 
         } catch (Exception e) {
             LOGGER.warn("[FACompat] setCoordsTarget failed: {}", e.getMessage());
@@ -354,6 +418,35 @@ public class FlightAssistantCompat {
     }
 
     /**
+     * Reads the airport elevation of a {@code DepartureData} or
+     * {@code ArrivalData} object.
+     *
+     * <p>Verified against FA 3.0.1: {@code DepartureData.elevation: Int} and
+     * {@code ArrivalData.elevation: Int} → JVM getter {@code getElevation()}.</p>
+     *
+     * <p><b>Coordinate note:</b> FA stores elevation as an <em>absolute MC world
+     * Y coordinate</em> (same as the block Y in the world), not as a height above
+     * sea level or height above terrain.  The value 0 is used as the
+     * "not set / default" sentinel by FA's own data classes.</p>
+     *
+     * @param planData a {@code DepartureData} or {@code ArrivalData} instance
+     * @return the stored elevation (absolute world Y), or {@code null} if not available
+     */
+    public static Integer getPlanElevation(Object planData) {
+        if (planData == null) return null;
+        try {
+            Method m = planData.getClass().getMethod("getElevation");
+            Object v = m.invoke(planData);
+            if (v instanceof Number) return ((Number) v).intValue();
+        } catch (NoSuchMethodException e) {
+            // Method absent — silently return null (no WARN to avoid per-frame spam)
+        } catch (Exception e) {
+            LOGGER.warn("[FACompat] getPlanElevation failed: {}", e.getMessage());
+        }
+        return null;
+    }
+
+    /**
      * Returns the index of the active (TARGET) enroute waypoint, or {@code -1}.
      *
      * <p>Verified against FA 3.0.1: {@code EnrouteWaypoint.active: Active?}
@@ -437,6 +530,7 @@ public class FlightAssistantCompat {
         try {
             Class<?> wpClass = Class.forName(CLASS_ENROUTE_WAYPOINT);
             Class<?> activeClass = Class.forName(CLASS_ENROUTE_ACTIVE);
+            Object activeTarget = hasAnyActiveWaypoint(waypoints) ? null : getEnumConstant(activeClass, "TARGET");
 
             // Verified against FA 3.0.1: primary constructor (int, int, int, int, Active?, UUID)
             Object newWaypoint = wpClass
@@ -446,11 +540,13 @@ public class FlightAssistantCompat {
                             (int) z,
                             (int) altitude,
                             speed != null ? speed.intValue() : 0,
-                            null,            // active = null (not yet navigating to it)
+                            activeTarget,
                             UUID.randomUUID()
                     );
 
             waypoints.add(newWaypoint);
+            reloadFMSEnrouteScreen(waypoints);
+            clearSelectedLateralMode();
             return true;
 
         } catch (NoSuchMethodException ex) {
@@ -472,7 +568,15 @@ public class FlightAssistantCompat {
                                 48,          // mask: bits 4+5 → use defaults
                                 null         // DefaultConstructorMarker
                         );
+                if (!hasAnyActiveWaypoint(waypoints)) {
+                    Object target = getEnumConstant(activeClass, "TARGET");
+                    if (target != null) {
+                        setWaypointActive(newWaypoint, target);
+                    }
+                }
                 waypoints.add(newWaypoint);
+                reloadFMSEnrouteScreen(waypoints);
+                clearSelectedLateralMode();
                 return true;
             } catch (Exception e2) {
                 LOGGER.warn("[FACompat] addEnrouteWaypoint (fallback) failed: {}", e2.getMessage());
@@ -484,9 +588,352 @@ public class FlightAssistantCompat {
         }
     }
 
+    /**
+     * Sets the flight plan departure waypoint to the given X/Z map coordinate.
+     *
+     * <p>Creates a {@code DepartureData(coordinatesX, coordinatesZ, elevation,
+     * takeoffThrust=1.0)} instance and stores it on the {@code FlightPlanComputer}.
+     * The player can refine values through FA's own FMS screen later.</p>
+     *
+     * <p>{@code elevation} is the absolute MC world Y coordinate of the runway
+     * surface (not terrain-relative, not sea-level-relative).  Passing 0 signals
+     * "not set"; the in-world renderer will then fall back to the terrain surface
+     * height at that location.</p>
+     *
+     * <p>Verified against FA 3.0.1: {@code FlightPlanComputer.departureData} is a
+     * Kotlin {@code var} property → JVM setter {@code setDepartureData(DepartureData)}.
+     * {@code DepartureData} primary constructor: {@code (Int, Int, Int, Float)}.</p>
+     *
+     * @param x         world X coordinate (converted to int)
+     * @param z         world Z coordinate (converted to int)
+     * @param elevation absolute MC world Y of the runway surface, or 0 if unknown
+     * @return {@code true} if the departure was set successfully
+     */
+    public static boolean setDepartureWaypoint(double x, double z, int elevation) {
+        Object plan = getFlightPlanComputer();
+        if (plan == null) {
+            LOGGER.warn("[FACompat] setDepartureWaypoint: FlightPlanComputer not available");
+            return false;
+        }
+        try {
+            // Verified against FA 3.0.1: DepartureData(coordinatesX: Int, coordinatesZ: Int,
+            //   elevation: Int, takeoffThrust: Float) — primary constructor.
+            // elevation is absolute MC world Y; takeoffThrust 1.0f = full power for takeoff.
+            Class<?> depClass = Class.forName(CLASS_DEPARTURE_DATA);
+            Object depData = depClass
+                    .getDeclaredConstructor(int.class, int.class, int.class, float.class)
+                    .newInstance((int) x, (int) z, elevation, 1.0f /* takeoffThrust: 100% power */);
+
+            // Verified against FA 3.0.1: Kotlin var departureData → setDepartureData(DepartureData)
+            Method setter = findMethodByName(plan.getClass(), "setDepartureData");
+            if (setter == null) {
+                LOGGER.warn("[FACompat] setDepartureData not found on FlightPlanComputer");
+                return false;
+            }
+            setter.setAccessible(true);
+            setter.invoke(plan, depData);
+            reloadFMSDepartureScreen(depData);
+            clearSelectedLateralMode();
+            return true;
+        } catch (NoSuchMethodException ex) {
+            // Fallback: use Kotlin synthetic constructor — pass all params explicitly (mask=0)
+            try {
+                Class<?> depClass = Class.forName(CLASS_DEPARTURE_DATA);
+                Class<?> marker = Class.forName("kotlin.jvm.internal.DefaultConstructorMarker");
+                Object depData = depClass
+                        .getDeclaredConstructor(int.class, int.class, int.class, float.class, int.class, marker)
+                        .newInstance((int) x, (int) z, elevation, 1.0f /* takeoffThrust: 100% power */, 0 /* mask=0: all params explicit */, null);
+                Method setter = findMethodByName(plan.getClass(), "setDepartureData");
+                if (setter == null) {
+                    LOGGER.warn("[FACompat] setDepartureData (fallback) not found");
+                    return false;
+                }
+                setter.setAccessible(true);
+                setter.invoke(plan, depData);
+                reloadFMSDepartureScreen(depData);
+                clearSelectedLateralMode();
+                return true;
+            } catch (Exception e2) {
+                LOGGER.warn("[FACompat] setDepartureWaypoint (fallback) failed: {}", e2.getMessage());
+                return false;
+            }
+        } catch (Exception e) {
+            LOGGER.warn("[FACompat] setDepartureWaypoint failed: {}", e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * Sets the flight plan arrival waypoint to the given X/Z map coordinate.
+     *
+     * <p>Creates an {@code ArrivalData(coordinatesX, coordinatesZ, elevation,
+     * landingThrust=0.3)} instance and stores it on the {@code FlightPlanComputer}.
+     * The remaining fields (minimums, minimumsType, goAroundAltitude,
+     * approachReEntryWaypointIndex) are left at their FA defaults.
+     * The player can refine them through FA's own FMS screen.</p>
+     *
+     * <p>{@code elevation} is the absolute MC world Y coordinate of the runway
+     * surface (not terrain-relative, not sea-level-relative).  Passing 0 signals
+     * "not set"; the in-world renderer will then fall back to the terrain surface
+     * height at that location.</p>
+     *
+     * <p>Verified against FA 3.0.1: {@code FlightPlanComputer.arrivalData} is a
+     * Kotlin {@code var} property → JVM setter {@code setArrivalData(ArrivalData)}.
+     * {@code ArrivalData} primary constructor:
+     * {@code (Int, Int, Int, Float, Int, MinimumsType, Int, Int)}.</p>
+     *
+     * @param x         world X coordinate (converted to int)
+     * @param z         world Z coordinate (converted to int)
+     * @param elevation absolute MC world Y of the runway surface, or 0 if unknown
+     * @return {@code true} if the arrival was set successfully
+     */
+    public static boolean setArrivalWaypoint(double x, double z, int elevation) {
+        Object plan = getFlightPlanComputer();
+        if (plan == null) {
+            LOGGER.warn("[FACompat] setArrivalWaypoint: FlightPlanComputer not available");
+            return false;
+        }
+        try {
+            // Verified against FA 3.0.1: ArrivalData(coordinatesX: Int, coordinatesZ: Int,
+            //   elevation: Int, landingThrust: Float, minimums: Int,
+            //   minimumsType: MinimumsType, goAroundAltitude: Int, approachReEntryWaypointIndex: Int)
+            // elevation is absolute MC world Y; landingThrust 0.3f = 30% approach power.
+            Class<?> arrClass    = Class.forName(CLASS_ARRIVAL_DATA);
+            Class<?> minTypeClass = Class.forName(CLASS_MINIMUMS_TYPE);
+            Object absoluteConst = getEnumConstant(minTypeClass, "ABSOLUTE");
+
+            Object arrData = arrClass
+                    .getDeclaredConstructor(int.class, int.class, int.class, float.class,
+                            int.class, minTypeClass, int.class, int.class)
+                    .newInstance((int) x, (int) z, elevation, 0.3f /* landingThrust: 30% approach power */, 0, absoluteConst, 0, 0);
+
+            // Verified against FA 3.0.1: Kotlin var arrivalData → setArrivalData(ArrivalData)
+            Method setter = findMethodByName(plan.getClass(), "setArrivalData");
+            if (setter == null) {
+                LOGGER.warn("[FACompat] setArrivalData not found on FlightPlanComputer");
+                return false;
+            }
+            setter.setAccessible(true);
+            setter.invoke(plan, arrData);
+            reloadFMSArrivalScreen(arrData);
+            clearSelectedLateralMode();
+            return true;
+        } catch (NoSuchMethodException ex) {
+            // Fallback: use Kotlin synthetic constructor.
+            // Bits 4-7 (mask=240) → defaults for minimums/minimumsType/goAroundAlt/approachReEntry;
+            // elevation (bit 2) and landingThrust (bit 3) are passed explicitly.
+            try {
+                Class<?> arrClass    = Class.forName(CLASS_ARRIVAL_DATA);
+                Class<?> minTypeClass = Class.forName(CLASS_MINIMUMS_TYPE);
+                Class<?> marker      = Class.forName("kotlin.jvm.internal.DefaultConstructorMarker");
+                Object arrData = arrClass
+                        .getDeclaredConstructor(int.class, int.class, int.class, float.class,
+                                int.class, minTypeClass, int.class, int.class, int.class, marker)
+                        .newInstance((int) x, (int) z, elevation, 0.3f /* landingThrust: 30% approach power */, 0, null, 0, 0,
+                                240 /* bits 4-7: defaults for minimums/minimumsType/goAroundAlt/approachReEntry */, null);
+                Method setter = findMethodByName(plan.getClass(), "setArrivalData");
+                if (setter == null) {
+                    LOGGER.warn("[FACompat] setArrivalData (fallback) not found");
+                    return false;
+                }
+                setter.setAccessible(true);
+                setter.invoke(plan, arrData);
+                reloadFMSArrivalScreen(arrData);
+                clearSelectedLateralMode();
+                return true;
+            } catch (Exception e2) {
+                LOGGER.warn("[FACompat] setArrivalWaypoint (fallback) failed: {}", e2.getMessage());
+                return false;
+            }
+        } catch (Exception e) {
+            LOGGER.warn("[FACompat] setArrivalWaypoint failed: {}", e.getMessage());
+            return false;
+        }
+    }
+
     // =========================================================================
     // Utility helpers
     // =========================================================================
+
+    // -------------------------------------------------------------------------
+    // FMS companion-object reload helpers
+    // -------------------------------------------------------------------------
+    // FA's FMS screens (DepartureScreen, ArrivalScreen, EnrouteScreen) cache
+    // the plan state in a companion-object (static) field. When this mod writes
+    // directly to the live FlightPlanComputer that cache becomes stale:
+    //   • The "Discard Changes" button lights up (screen state ≠ live data).
+    //   • Worse: DepartureScreen/ArrivalScreen call state.save(computers.plan) on
+    //     close, which writes the OLD cached data back and wipes our changes.
+    // Calling companion.reload(newData) immediately after each write keeps the
+    // cache in sync so the FMS screens open cleanly without any prompt.
+
+    /**
+     * Syncs the DepartureScreen companion-object state with {@code departureData}.
+     * <p>Equivalent to calling {@code DepartureScreen.Companion.reload(departureData)}.</p>
+     */
+    private static void reloadFMSDepartureScreen(Object departureData) {
+        try {
+            Class<?> depDataClass = Class.forName(CLASS_DEPARTURE_DATA);
+            reloadFMSCompanion(CLASS_DEPARTURE_SCREEN, departureData, depDataClass);
+        } catch (Exception e) {
+            LOGGER.debug("[FACompat] reloadFMSDepartureScreen failed: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * Syncs the ArrivalScreen companion-object state with {@code arrivalData}.
+     * <p>Equivalent to calling {@code ArrivalScreen.Companion.reload(arrivalData)}.</p>
+     */
+    private static void reloadFMSArrivalScreen(Object arrivalData) {
+        try {
+            Class<?> arrDataClass = Class.forName(CLASS_ARRIVAL_DATA);
+            reloadFMSCompanion(CLASS_ARRIVAL_SCREEN, arrivalData, arrDataClass);
+        } catch (Exception e) {
+            LOGGER.debug("[FACompat] reloadFMSArrivalScreen failed: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * Syncs the EnrouteScreen companion-object state with the current
+     * {@code enrouteData} list.
+     * <p>Equivalent to calling {@code EnrouteScreen.Companion.reload(enrouteData)}.</p>
+     */
+    private static void reloadFMSEnrouteScreen(List<Object> enrouteData) {
+        try {
+            Class<?> screenClass = Class.forName(CLASS_ENROUTE_SCREEN);
+            Field companionField = screenClass.getDeclaredField("Companion");
+            companionField.setAccessible(true);
+            Object companion = companionField.get(null);
+            // Generic erasure: JVM sees List, not List<EnrouteWaypoint>
+            Method reload = companion.getClass().getMethod("reload", List.class);
+            reload.invoke(companion, enrouteData);
+        } catch (Exception e) {
+            LOGGER.debug("[FACompat] reloadFMSEnrouteScreen failed: {}", e.getMessage());
+        }
+    }
+
+    /** Calls the {@code reload(data)} method on the Kotlin companion object of the named screen. */
+    private static void reloadFMSCompanion(String screenClassName, Object data, Class<?> dataClass)
+            throws Exception {
+        Class<?> screenClass = Class.forName(screenClassName);
+        Field companionField = screenClass.getDeclaredField("Companion");
+        companionField.setAccessible(true);
+        Object companion = companionField.get(null);
+        Method reload = companion.getClass().getMethod("reload", dataClass);
+        reload.invoke(companion, data);
+    }
+
+    /**
+     * Clears {@code AutoFlightComputer.selectedLateralMode} to {@code null} so that
+     * FA's own {@code FlightPlanComputer.getLateralMode()} drives navigation.
+     *
+     * <p>FA resolves the active lateral mode as
+     * {@code selectedLateralMode ?: computers.plan.getLateralMode()}.
+     * If a previous "Fly Here" or "Set as COORDS Target" action left a static
+     * {@code DirectCoordinatesLateralMode} in {@code selectedLateralMode}, it would
+     * permanently override the flight-plan mode even after FA advances to the next
+     * waypoint. Clearing it here hands control back to FA's sequencing logic.</p>
+     *
+     * <p>Verified against FA 3.0.1: Kotlin {@code var selectedLateralMode: LateralMode?}
+     * → JVM setter {@code setSelectedLateralMode(LateralMode)}.</p>
+     */
+    private static void clearSelectedLateralMode() {
+        Object afc = getAutoFlightComputer();
+        if (afc == null) return;
+        try {
+            Method setter = findMethodByName(afc.getClass(), "setSelectedLateralMode");
+            if (setter == null) {
+                LOGGER.debug("[FACompat] clearSelectedLateralMode: setSelectedLateralMode not found");
+                return;
+            }
+            setter.setAccessible(true);
+            setter.invoke(afc, (Object) null);
+        } catch (Exception e) {
+            LOGGER.debug("[FACompat] clearSelectedLateralMode failed: {}", e.getMessage());
+        }
+    }
+
+    /** Enables FA autopilot so selected modes affect heading/pitch outputs. */
+    private static boolean enableAutoPilot(Object autoFlightComputer) {
+        if (autoFlightComputer == null) return false;
+        try {
+            Method setAutoPilot = findMethod(autoFlightComputer.getClass(), "setAutoPilot", boolean.class, Boolean.class);
+            if (setAutoPilot == null) {
+                LOGGER.warn("[FACompat] setAutoPilot(boolean, Boolean) not found");
+                return false;
+            }
+            setAutoPilot.setAccessible(true);
+            setAutoPilot.invoke(autoFlightComputer, true, null);
+            return true;
+        } catch (Exception e) {
+            LOGGER.warn("[FACompat] enableAutoPilot failed: {}", e.getMessage());
+            return false;
+        }
+    }
+
+    /** Returns true if any enroute waypoint is currently marked ORIGIN/TARGET. */
+    private static boolean hasAnyActiveWaypoint(List<Object> waypoints) {
+        if (waypoints == null || waypoints.isEmpty()) return false;
+        for (Object waypoint : waypoints) {
+            if (waypoint == null) continue;
+            try {
+                Method getter = findMethodByName(waypoint.getClass(), "getActive");
+                if (getter == null) continue;
+                getter.setAccessible(true);
+                if (getter.invoke(waypoint) != null) {
+                    return true;
+                }
+            } catch (Exception e) {
+                LOGGER.warn("[FACompat] hasAnyActiveWaypoint failed: {}", e.getMessage());
+                return false;
+            }
+        }
+        return false;
+    }
+
+    /** Sets the mutable {@code active} property on an enroute waypoint instance. */
+    private static void setWaypointActive(Object waypoint, Object active) throws Exception {
+        if (waypoint == null) return;
+        Method setter = findMethodByName(waypoint.getClass(), "setActive");
+        if (setter != null) {
+            setter.setAccessible(true);
+            setter.invoke(waypoint, active);
+        }
+    }
+
+    /** Finds an enum constant by name, returning null if unavailable. */
+    private static Object getEnumConstant(Class<?> enumClass, String name) {
+        if (enumClass == null || !enumClass.isEnum()) return null;
+        Object[] constants = enumClass.getEnumConstants();
+        if (constants == null) return null;
+        for (Object c : constants) {
+            if (c instanceof Enum<?> e && name.equals(e.name())) {
+                return c;
+            }
+        }
+        return null;
+    }
+
+    /** Searches class hierarchy for a method with an exact name/signature match. */
+    private static Method findMethod(Class<?> clazz, String name, Class<?>... paramTypes) {
+        Class<?> current = clazz;
+        while (current != null) {
+            try {
+                return current.getDeclaredMethod(name, paramTypes);
+            } catch (NoSuchMethodException ignored) {
+                // Continue searching
+            }
+            for (Class<?> iface : current.getInterfaces()) {
+                try {
+                    return iface.getDeclaredMethod(name, paramTypes);
+                } catch (NoSuchMethodException ignored) {
+                    // Continue searching
+                }
+            }
+            current = current.getSuperclass();
+        }
+        return null;
+    }
 
     /** Searches a class (and supertypes) for a method matching the given name. */
     private static Method findMethodByName(Class<?> clazz, String name) {
@@ -517,4 +964,3 @@ public class FlightAssistantCompat {
         }
     }
 }
-

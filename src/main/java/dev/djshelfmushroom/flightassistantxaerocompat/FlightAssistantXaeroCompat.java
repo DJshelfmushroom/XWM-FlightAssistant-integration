@@ -3,6 +3,7 @@ package dev.djshelfmushroom.flightassistantxaerocompat;
 import dev.djshelfmushroom.flightassistantxaerocompat.compat.FlightAssistantCompat;
 import dev.djshelfmushroom.flightassistantxaerocompat.compat.XaeroCompat;
 import dev.djshelfmushroom.flightassistantxaerocompat.events.WaypointContextMenuHandler;
+import dev.djshelfmushroom.flightassistantxaerocompat.render.InWorldWaypointRenderer;
 import net.minecraftforge.common.MinecraftForge;
 import net.minecraftforge.eventbus.api.IEventBus;
 import net.minecraftforge.fml.ModList;
@@ -56,6 +57,11 @@ public class FlightAssistantXaeroCompat {
         if (xaeroPresent && flightAssistantPresent) {
             MinecraftForge.EVENT_BUS.register(new WaypointContextMenuHandler());
             LOGGER.info("[{}] Waypoint context menu handler registered.", MOD_ID);
+        }
+
+        if (flightAssistantPresent || xaeroPresent) {
+            MinecraftForge.EVENT_BUS.register(new InWorldWaypointRenderer());
+            LOGGER.info("[{}] In-world waypoint renderer registered.", MOD_ID);
         }
 
         LOGGER.info("[{}] Client setup complete. Xaero={}, FA={}",

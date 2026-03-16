@@ -26,7 +26,7 @@ This document walks you through every step needed to build
 
 | Tool        | Version         | Notes                                           |
 |-------------|-----------------|-------------------------------------------------|
-| **Java**    | 17 – 25         | Must be on `PATH`; JDK (not JRE) required. Java 17 LTS or Java 21 LTS are recommended. |
+| **Java**    | 17 – 25         | Must be on `PATH`; JDK (not JRE) required. If JDK 17 is missing, Gradle auto-downloads a matching toolchain. |
 | **Gradle**  | 8.14.4          | Use the included wrapper (`./gradlew`) — do **not** install a separate Gradle |
 | **Network** | —               | Required on first build to download Forge, mappings, Xaero, and FlightAssistant |
 
@@ -41,6 +41,10 @@ java -version
 > supports Java 17 through Java 25. If you are using a newer JDK, update the
 > `distributionUrl` in `gradle/wrapper/gradle-wrapper.properties` to the latest
 > Gradle 8.x release.
+
+> **Toolchain note:** The project compiles against Java 17. If only Java 21/25
+> is installed locally, Gradle will automatically provision a Java 17 toolchain
+> via Foojay on first build.
 
 > **Apple Silicon / ARM64 users:** Azul Zulu JDK 17 for arm64 is recommended.
 > AdoptOpenJDK / Eclipse Temurin 17 also works.
@@ -76,12 +80,18 @@ are listed in `.gitignore` and will never be accidentally committed.
 
 ### Xaero's World Map — automatic (default)
 
-Resolved automatically from [Xaero's Maven](https://maven.xeadmc.net/).
+By default, Xaero's World Map is resolved from
+[Modrinth's Maven mirror](https://api.modrinth.com/maven) using:
+
+```text
+maven.modrinth:xaeros-world-map:1.39.2_Forge_1.20
+```
+
 No manual action needed.
 
 ### Xaero's World Map — local jar (fallback)
 
-If Xaero's Maven is unreachable, place the JAR in `libs/` and the build will
+If Modrinth Maven is unreachable, place the JAR in `libs/` and the build will
 use it automatically:
 
 1. Download **XaeroWorldMap-1.39.2_Forge_1.20.1.jar** from the
@@ -102,13 +112,15 @@ use it automatically:
 3. `build.gradle` automatically detects the file and skips the remote Maven
    lookup:
    ```groovy
-   def localXaeroJar = file("libs/XaeroWorldMap-${project.xaero_worldmap_version}.jar")
-   if (localXaeroJar.exists()) {
-       compileOnly fg.deobf(files(localXaeroJar))
-   } else {
-       compileOnly fg.deobf("xaero.public.maven:XaeroWorldMap:${project.xaero_worldmap_version}")
-   }
-   ```
+    def localXaeroJar = file("libs/XaeroWorldMap-${project.xaero_worldmap_version}.jar")
+    if (localXaeroJar.exists()) {
+        compileOnly fg.deobf(files(localXaeroJar))
+    } else {
+        compileOnly fg.deobf("maven.modrinth:xaeros-world-map:${project.xaero_worldmap_modrinth_version}") {
+            transitive = false
+        }
+    }
+    ```
 
 ### FlightAssistant — automatic (default)
 
@@ -220,15 +232,16 @@ Import the project as an existing Gradle project. A launch configuration named
 
 ## 7. Troubleshooting
 
-### `Could not resolve xaero.public.maven:XaeroWorldMap:1.39.2_Forge_1.20.1`
+### `Could not resolve maven.modrinth:xaeros-world-map:1.39.2_Forge_1.20`
 
-The Xaero Maven (`https://maven.xeadmc.net/`) was unreachable during the
-build. Check your network connection or VPN. The server is occasionally slow;
-retry with:
+The Modrinth Maven (`https://api.modrinth.com/maven`) was unreachable during
+the build. Check your network connection or VPN, then retry with:
 
 ```bash
 ./gradlew build --refresh-dependencies
 ```
+
+If the issue persists, use the [local jar fallback](#xaeros-world-map--local-jar-fallback).
 
 ### `Could not resolve maven.modrinth:flightassistant:3.0.1+1.20.1-forge`
 

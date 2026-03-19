@@ -5,6 +5,7 @@ import dev.djshelfmushroom.flightassistantxaerocompat.compat.FlightAssistantComp
 import dev.djshelfmushroom.flightassistantxaerocompat.gui.WaypointAltitudeScreen;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.core.SectionPos;
 import net.minecraft.world.level.levelgen.Heightmap;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
@@ -163,12 +164,19 @@ public abstract class MixinGuiMap {
      * always present in chunk network packets.  {@code MOTION_BLOCKING_NO_LEAVES}
      * uses {@code Heightmap.Usage.LIVE} and is never sent to the client, so
      * {@code getHeight()} would always return 0 regardless of chunk load state.
-     * Returns 0 when the chunk is not loaded; callers treat 0 as "not set" and
-     * fall back to other height sources at render time.
+     *
+     * <p>In MC 1.18+, {@code level.getHeight()} on an <em>unloaded</em> chunk
+     * returns the world's minimum build height ({@code -64}), not {@code 0}.
+     * We explicitly check {@code hasChunk()} first and return {@code 0} for
+     * unloaded chunks so callers can treat {@code 0} as "not set" and fall back
+     * to other height sources (e.g. sea level) at render time.</p>
      */
     private static int terrainElevation(int x, int z) {
         Minecraft mc = Minecraft.getInstance();
         if (mc.level == null) return 0;
+        int cx = SectionPos.blockToSectionCoord(x);
+        int cz = SectionPos.blockToSectionCoord(z);
+        if (!mc.level.getChunkSource().hasChunk(cx, cz)) return 0;
         return mc.level.getHeight(Heightmap.Types.WORLD_SURFACE, x, z);
     }
 }

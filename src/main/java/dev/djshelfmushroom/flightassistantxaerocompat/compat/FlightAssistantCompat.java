@@ -65,6 +65,23 @@ public class FlightAssistantCompat {
             "ru.octol1ttle.flightassistant.impl.computer.autoflight.modes.DirectCoordinatesLateralMode";
 
     /**
+     * The selected-altitude vertical mode — descends/climbs to a fixed world Y.
+     * <p>Verified against FA 3.0.1: BuiltInVerticalModes.kt,
+     * class {@code SelectedAltitudeVerticalMode(targetAltitude: Int,
+     * textOverride: Component? = null)}</p>
+     */
+    private static final String CLASS_SELECTED_ALT_VERTICAL =
+            "ru.octol1ttle.flightassistant.impl.computer.autoflight.modes.SelectedAltitudeVerticalMode";
+
+    /**
+     * The constant-thrust mode — holds a fixed thrust percentage.
+     * <p>Verified against FA 3.0.1: BuiltInThrustModes.kt,
+     * class {@code ConstantThrustMode(target: Float, textOverride: Component? = null)}</p>
+     */
+    private static final String CLASS_CONSTANT_THRUST =
+            "ru.octol1ttle.flightassistant.impl.computer.autoflight.modes.ConstantThrustMode";
+
+    /**
      * A single enroute waypoint in the flight plan.
      * <p>Verified against FA 3.0.1: FlightPlanComputer.kt,
      * nested data class {@code EnrouteWaypoint(coordinatesX, coordinatesZ,
@@ -334,6 +351,82 @@ public class FlightAssistantCompat {
         }
     }
 
+    /**
+     * Sets FA's {@code selectedVerticalMode} to
+     * {@code SelectedAltitudeVerticalMode(targetAltitude)} so the autopilot
+     * descends/climbs toward the given absolute MC world Y coordinate.
+     *
+     * <p>Verified against FA 3.0.1: {@code BuiltInVerticalModes.kt} —
+     * {@code SelectedAltitudeVerticalMode(targetAltitude: Int, textOverride: Component?)}
+     * and {@code AutoFlightComputer.setSelectedVerticalMode(VerticalMode)}.</p>
+     *
+     * @param targetAltitude absolute MC world Y to target (must be {@code != 0};
+     *                       0 is FA's "not set" sentinel and will be skipped)
+     * @return {@code true} if applied successfully
+     */
+    public static boolean setApproachVerticalMode(int targetAltitude) {
+        if (targetAltitude == 0) {
+            LOGGER.debug("[FACompat] setApproachVerticalMode: skipped — elevation is 0 (unset sentinel)");
+            return false;
+        }
+        Object afc = getAutoFlightComputer();
+        if (afc == null) return false;
+        try {
+            // Verified against FA 3.0.1: SelectedAltitudeVerticalMode(int, Component)
+            Class<?> modeClass = Class.forName(CLASS_SELECTED_ALT_VERTICAL);
+            Object modeInstance = modeClass
+                    .getDeclaredConstructor(int.class, Component.class)
+                    .newInstance(targetAltitude, null);
+
+            Method setter = findMethodByName(afc.getClass(), "setSelectedVerticalMode");
+            if (setter == null) {
+                LOGGER.warn("[FACompat] setSelectedVerticalMode not found on AutoFlightComputer");
+                return false;
+            }
+            setter.setAccessible(true);
+            setter.invoke(afc, modeInstance);
+            return true;
+        } catch (Exception e) {
+            LOGGER.warn("[FACompat] setApproachVerticalMode failed: {}", e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * Sets FA's {@code selectedThrustMode} to {@code ConstantThrustMode(target)}
+     * so the autopilot holds the given thrust fraction during approach/landing.
+     *
+     * <p>Verified against FA 3.0.1: {@code BuiltInThrustModes.kt} —
+     * {@code ConstantThrustMode(target: Float, textOverride: Component?)}
+     * and {@code AutoFlightComputer.setSelectedThrustMode(ThrustMode)}.</p>
+     *
+     * @param thrust approach thrust fraction in [0, 1] (e.g. {@code 0.3f} = 30 %)
+     * @return {@code true} if applied successfully
+     */
+    public static boolean setApproachThrustMode(float thrust) {
+        Object afc = getAutoFlightComputer();
+        if (afc == null) return false;
+        try {
+            // Verified against FA 3.0.1: ConstantThrustMode(float, Component)
+            Class<?> modeClass = Class.forName(CLASS_CONSTANT_THRUST);
+            Object modeInstance = modeClass
+                    .getDeclaredConstructor(float.class, Component.class)
+                    .newInstance(thrust, null);
+
+            Method setter = findMethodByName(afc.getClass(), "setSelectedThrustMode");
+            if (setter == null) {
+                LOGGER.warn("[FACompat] setSelectedThrustMode not found on AutoFlightComputer");
+                return false;
+            }
+            setter.setAccessible(true);
+            setter.invoke(afc, modeInstance);
+            return true;
+        } catch (Exception e) {
+            LOGGER.warn("[FACompat] setApproachThrustMode failed: {}", e.getMessage());
+            return false;
+        }
+    }
+
     // =========================================================================
     // FlightPlanComputer helpers
     // =========================================================================
@@ -480,6 +573,29 @@ public class FlightAssistantCompat {
             // Method absent — silently return null (no WARN to avoid per-frame spam)
         } catch (Exception e) {
             LOGGER.warn("[FACompat] getPlanElevation failed: {}", e.getMessage());
+        }
+        return null;
+    }
+
+    /**
+     * Returns the landing thrust fraction (0–1) stored in an {@code ArrivalData} object.
+     *
+     * <p>Verified against FA 3.0.1: {@code ArrivalData.landingThrust: Float}
+     * → JVM getter {@code getLandingThrust()}.</p>
+     *
+     * @param arrivalData an {@code ArrivalData} instance
+     * @return the landing thrust fraction, or {@code null} if not available
+     */
+    public static Float getPlanLandingThrust(Object arrivalData) {
+        if (arrivalData == null) return null;
+        try {
+            Method m = arrivalData.getClass().getMethod("getLandingThrust");
+            Object v = m.invoke(arrivalData);
+            if (v instanceof Number) return ((Number) v).floatValue();
+        } catch (NoSuchMethodException e) {
+            // Method absent — silently return null
+        } catch (Exception e) {
+            LOGGER.warn("[FACompat] getPlanLandingThrust failed: {}", e.getMessage());
         }
         return null;
     }
@@ -838,8 +954,11 @@ public class FlightAssistantCompat {
      *   <li><b>One-shot approach fallback</b> — as a safety net, when all
      *       enroute waypoints are done, arrival data is present, and no lateral
      *       mode is currently active (FA's plan returned {@code null}), a
-     *       direct-to-arrival COORDS target is set once so the plane still
-     *       heads to the destination.</li>
+     *       direct-to-arrival COORDS target is set once, together with a
+     *       {@code SelectedAltitudeVerticalMode} targeting the runway elevation
+     *       and a {@code ConstantThrustMode} at the arrival's landing thrust,
+     *       so the plane descends and reduces power on the way to the
+     *       destination.</li>
      * </ol>
      */
     public static void tickNavigation() {
@@ -867,6 +986,9 @@ public class FlightAssistantCompat {
         // arrival data is present, and no lateral mode is currently selected
         // (FA's plan mode returned null), explicitly fly toward the arrival so
         // the plane does not just maintain its last heading.
+        // Also set the vertical mode to descend to the runway elevation and the
+        // thrust mode to the arrival's landing thrust so FA doesn't keep full
+        // throttle all the way to the ground.
         if (!approachFallbackTriggered && currentActiveIdx == -1) {
             List<Object> enroute = getEnrouteWaypoints();
             if (enroute != null && !enroute.isEmpty()) {
@@ -878,9 +1000,24 @@ public class FlightAssistantCompat {
                             && !isSelectedLateralModeActive()
                             && getPlanLateralMode() == null) {
                         setCoordsTarget(arrX, arrZ);
+
+                        // Descend to runway elevation if it is set (non-zero sentinel).
+                        Integer elevation = getPlanElevation(arrival);
+                        if (elevation != null && elevation != 0) {
+                            setApproachVerticalMode(elevation);
+                        }
+
+                        // Reduce thrust to the arrival's landing-thrust setting.
+                        Float landingThrust = getPlanLandingThrust(arrival);
+                        if (landingThrust != null) {
+                            setApproachThrustMode(landingThrust);
+                        }
+
                         approachFallbackTriggered = true;
                         LOGGER.info("[FACompat] No lateral mode after enroute — "
-                                + "initiated fallback approach to arrival ({}, {}).", arrX, arrZ);
+                                + "initiated fallback approach to arrival ({}, {}), "
+                                + "elevation={}, landingThrust={}.",
+                                arrX, arrZ, elevation, landingThrust);
                         sendChatMessage("§eApproach to arrival initiated.");
                     }
                 }

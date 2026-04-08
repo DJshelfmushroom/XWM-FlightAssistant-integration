@@ -134,11 +134,11 @@ public class WaypointAltitudeScreen extends Screen {
         // always receives a non-zero speed target (speed=0 suppresses thrust).
         if (minecraft != null && minecraft.player != null) {
             net.minecraft.world.phys.Vec3 motion = minecraft.player.getDeltaMovement();
-            double horizontalSpeedPerSecond =
+            double horizontalSpeed =
                     Math.sqrt(motion.x * motion.x + motion.z * motion.z) * 20.0;
             // Round to the nearest integer; use at least 10 blocks/s so the
             // field is never blank or zero even when the player is stationary.
-            int suggestedSpeed = (int) Math.round(horizontalSpeedPerSecond);
+            int suggestedSpeed = (int) Math.round(horizontalSpeed);
             if (suggestedSpeed < 10) suggestedSpeed = 10;
             speedField.setValue(String.valueOf(suggestedSpeed));
         }

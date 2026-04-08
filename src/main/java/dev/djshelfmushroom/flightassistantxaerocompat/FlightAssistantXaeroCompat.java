@@ -1,7 +1,7 @@
 package dev.djshelfmushroom.flightassistantxaerocompat;
 
-import dev.djshelfmushroom.flightassistantxaerocompat.compat.FlightAssistantCompat;
 import dev.djshelfmushroom.flightassistantxaerocompat.compat.XaeroCompat;
+import dev.djshelfmushroom.flightassistantxaerocompat.events.FlightPlanNavigationTickHandler;
 import dev.djshelfmushroom.flightassistantxaerocompat.events.WaypointContextMenuHandler;
 import dev.djshelfmushroom.flightassistantxaerocompat.render.InWorldWaypointRenderer;
 import net.minecraftforge.common.MinecraftForge;
@@ -57,6 +57,11 @@ public class FlightAssistantXaeroCompat {
         if (xaeroPresent && flightAssistantPresent) {
             MinecraftForge.EVENT_BUS.register(new WaypointContextMenuHandler());
             LOGGER.info("[{}] Waypoint context menu handler registered.", MOD_ID);
+        }
+
+        if (flightAssistantPresent) {
+            MinecraftForge.EVENT_BUS.register(new FlightPlanNavigationTickHandler());
+            LOGGER.info("[{}] Flight-plan navigation tick handler registered.", MOD_ID);
         }
 
         if (flightAssistantPresent || xaeroPresent) {

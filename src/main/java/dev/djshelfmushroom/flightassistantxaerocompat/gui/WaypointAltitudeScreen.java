@@ -1,11 +1,16 @@
 package dev.djshelfmushroom.flightassistantxaerocompat.gui;
 
 import dev.djshelfmushroom.flightassistantxaerocompat.compat.FlightAssistantCompat;
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
+import net.minecraft.server.MinecraftServer;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.level.chunk.ChunkStatus;
+import net.minecraft.world.level.levelgen.Heightmap;
 import org.lwjgl.glfw.GLFW;
 
 /**
@@ -70,6 +75,45 @@ public class WaypointAltitudeScreen extends Screen {
         altitudeField.setMaxLength(8);
         altitudeField.setHint(Component.literal("required"));
         altitudeField.setResponder(this::onAltitudeChanged);
+
+        // Pre-populate with the terrain surface Y at the waypoint's XZ coordinates
+        // so the player has a sensible default (height above ground) instead of y=0.
+        if (minecraft != null && minecraft.level != null) {
+            int bx = (int) Math.floor(waypointX);
+            int bz = (int) Math.floor(waypointZ);
+            int chunkX = net.minecraft.core.SectionPos.blockToSectionCoord(bx);
+            int chunkZ = net.minecraft.core.SectionPos.blockToSectionCoord(bz);
+            if (minecraft.level.getChunkSource().hasChunk(chunkX, chunkZ)) {
+                // Chunk already loaded on client — query heightmap immediately.
+                altitudeField.setValue(String.valueOf(
+                        minecraft.level.getHeight(Heightmap.Types.WORLD_SURFACE, bx, bz)));
+            } else {
+                // Chunk not loaded on client — use sea level as a placeholder.
+                // In singleplayer, kick off a server-thread task to load the chunk
+                // (equivalent to /forceload add) and update the field once ready.
+                altitudeField.setValue(String.valueOf(minecraft.level.getSeaLevel()));
+                MinecraftServer server = minecraft.getSingleplayerServer();
+                if (server != null) {
+                    server.submit(() -> {
+                        ServerLevel serverLevel = server.getLevel(minecraft.level.dimension());
+                        if (serverLevel == null) return;
+                        // Loading with ChunkStatus.FULL and shouldLoad=true is the
+                        // programmatic equivalent of /forceload add for this chunk.
+                        net.minecraft.world.level.chunk.ChunkAccess chunk =
+                                serverLevel.getChunkSource().getChunk(chunkX, chunkZ, ChunkStatus.FULL, true);
+                        if (chunk == null) return;
+                        int h = serverLevel.getHeight(Heightmap.Types.WORLD_SURFACE, bx, bz);
+                        // Update the field on the render thread only if screen is still open.
+                        minecraft.execute(() -> {
+                            if (minecraft.screen == WaypointAltitudeScreen.this) {
+                                altitudeField.setValue(String.valueOf(h));
+                            }
+                        });
+                    });
+                }
+            }
+        }
+
         addRenderableWidget(altitudeField);
 
         // ---- Speed field (optional) ----

@@ -65,6 +65,23 @@ public class FlightAssistantCompat {
             "ru.octol1ttle.flightassistant.impl.computer.autoflight.modes.DirectCoordinatesLateralMode";
 
     /**
+     * The selected-altitude vertical mode — descends/climbs to a fixed world Y.
+     * <p>Verified against FA 3.0.1: BuiltInVerticalModes.kt,
+     * class {@code SelectedAltitudeVerticalMode(targetAltitude: Int,
+     * textOverride: Component? = null)}</p>
+     */
+    private static final String CLASS_SELECTED_ALT_VERTICAL =
+            "ru.octol1ttle.flightassistant.impl.computer.autoflight.modes.SelectedAltitudeVerticalMode";
+
+    /**
+     * The constant-thrust mode — holds a fixed thrust percentage.
+     * <p>Verified against FA 3.0.1: BuiltInThrustModes.kt,
+     * class {@code ConstantThrustMode(target: Float, textOverride: Component? = null)}</p>
+     */
+    private static final String CLASS_CONSTANT_THRUST =
+            "ru.octol1ttle.flightassistant.impl.computer.autoflight.modes.ConstantThrustMode";
+
+    /**
      * A single enroute waypoint in the flight plan.
      * <p>Verified against FA 3.0.1: FlightPlanComputer.kt,
      * nested data class {@code EnrouteWaypoint(coordinatesX, coordinatesZ,
@@ -135,6 +152,44 @@ public class FlightAssistantCompat {
     // Chat prefix shared by all user-visible messages
     // -------------------------------------------------------------------------
     private static final String CHAT_PREFIX = "§7[FlightAssistant] §r";
+
+    // =========================================================================
+    // Per-tick navigation state
+    // =========================================================================
+
+    /** Sentinel: navigation tracker has not been initialised or autopilot was off. */
+    private static final int UNINITIALIZED_INDEX = Integer.MIN_VALUE;
+
+    /**
+     * Active-waypoint index cached from the previous call to
+     * {@link #tickNavigation()}.  Used to detect when FA's internal plan
+     * advances to a new waypoint (or finishes the enroute sequence entirely).
+     */
+    private static int lastTickActiveWaypointIndex = UNINITIALIZED_INDEX;
+
+    /**
+     * {@code true} once the one-shot approach fallback has been fired for the
+     * current "all enroute done" segment, preventing repeated
+     * {@code setCoordsTarget} calls every tick.
+     */
+    private static boolean approachFallbackTriggered = false;
+
+    // -------------------------------------------------------------------------
+    // Reflection caches for getActiveWaypointIndex() — populated on first use
+    // to avoid Class.forName + enum scan + getMethod on every client tick.
+    // -------------------------------------------------------------------------
+
+    /** Cached {@code EnrouteWaypoint.Active} enum class, or {@code null} if not yet loaded. */
+    private static Class<?> cachedEnrouteActiveClass;
+    /** Cached {@code Active.TARGET} enum constant, or {@code null} if not yet loaded. */
+    private static Object   cachedTargetConstant;
+    /**
+     * Cached {@code getActive()} method retrieved from the first EnrouteWaypoint instance seen.
+     * All waypoints share the same class so one cache entry suffices.
+     */
+    private static Method   cachedGetActiveMethod;
+    /** Set to {@code true} if the enum class or TARGET constant could not be loaded. */
+    private static boolean  enrouteActiveClassLoadFailed;
 
     // =========================================================================
     // Computer access helpers
@@ -296,6 +351,82 @@ public class FlightAssistantCompat {
         }
     }
 
+    /**
+     * Sets FA's {@code selectedVerticalMode} to
+     * {@code SelectedAltitudeVerticalMode(targetAltitude)} so the autopilot
+     * descends/climbs toward the given absolute MC world Y coordinate.
+     *
+     * <p>Verified against FA 3.0.1: {@code BuiltInVerticalModes.kt} —
+     * {@code SelectedAltitudeVerticalMode(targetAltitude: Int, textOverride: Component?)}
+     * and {@code AutoFlightComputer.setSelectedVerticalMode(VerticalMode)}.</p>
+     *
+     * @param targetAltitude absolute MC world Y to target (must be {@code != 0};
+     *                       0 is FA's "not set" sentinel and will be skipped)
+     * @return {@code true} if applied successfully
+     */
+    public static boolean setApproachVerticalMode(int targetAltitude) {
+        if (targetAltitude == 0) {
+            LOGGER.debug("[FACompat] setApproachVerticalMode: skipped — elevation is 0 (unset sentinel)");
+            return false;
+        }
+        Object afc = getAutoFlightComputer();
+        if (afc == null) return false;
+        try {
+            // Verified against FA 3.0.1: SelectedAltitudeVerticalMode(int, Component)
+            Class<?> modeClass = Class.forName(CLASS_SELECTED_ALT_VERTICAL);
+            Object modeInstance = modeClass
+                    .getDeclaredConstructor(int.class, Component.class)
+                    .newInstance(targetAltitude, null);
+
+            Method setter = findMethodByName(afc.getClass(), "setSelectedVerticalMode");
+            if (setter == null) {
+                LOGGER.warn("[FACompat] setSelectedVerticalMode not found on AutoFlightComputer");
+                return false;
+            }
+            setter.setAccessible(true);
+            setter.invoke(afc, modeInstance);
+            return true;
+        } catch (Exception e) {
+            LOGGER.warn("[FACompat] setApproachVerticalMode failed: {}", e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * Sets FA's {@code selectedThrustMode} to {@code ConstantThrustMode(target)}
+     * so the autopilot holds the given thrust fraction during approach/landing.
+     *
+     * <p>Verified against FA 3.0.1: {@code BuiltInThrustModes.kt} —
+     * {@code ConstantThrustMode(target: Float, textOverride: Component?)}
+     * and {@code AutoFlightComputer.setSelectedThrustMode(ThrustMode)}.</p>
+     *
+     * @param thrust approach thrust fraction in [0, 1] (e.g. {@code 0.3f} = 30 %)
+     * @return {@code true} if applied successfully
+     */
+    public static boolean setApproachThrustMode(float thrust) {
+        Object afc = getAutoFlightComputer();
+        if (afc == null) return false;
+        try {
+            // Verified against FA 3.0.1: ConstantThrustMode(float, Component)
+            Class<?> modeClass = Class.forName(CLASS_CONSTANT_THRUST);
+            Object modeInstance = modeClass
+                    .getDeclaredConstructor(float.class, Component.class)
+                    .newInstance(thrust, null);
+
+            Method setter = findMethodByName(afc.getClass(), "setSelectedThrustMode");
+            if (setter == null) {
+                LOGGER.warn("[FACompat] setSelectedThrustMode not found on AutoFlightComputer");
+                return false;
+            }
+            setter.setAccessible(true);
+            setter.invoke(afc, modeInstance);
+            return true;
+        } catch (Exception e) {
+            LOGGER.warn("[FACompat] setApproachThrustMode failed: {}", e.getMessage());
+            return false;
+        }
+    }
+
     // =========================================================================
     // FlightPlanComputer helpers
     // =========================================================================
@@ -447,31 +578,71 @@ public class FlightAssistantCompat {
     }
 
     /**
+     * Returns the landing thrust fraction (0–1) stored in an {@code ArrivalData} object.
+     *
+     * <p>Verified against FA 3.0.1: {@code ArrivalData.landingThrust: Float}
+     * → JVM getter {@code getLandingThrust()}.</p>
+     *
+     * @param arrivalData an {@code ArrivalData} instance
+     * @return the landing thrust fraction, or {@code null} if not available
+     */
+    public static Float getPlanLandingThrust(Object arrivalData) {
+        if (arrivalData == null) return null;
+        try {
+            Method m = arrivalData.getClass().getMethod("getLandingThrust");
+            Object v = m.invoke(arrivalData);
+            if (v instanceof Number) return ((Number) v).floatValue();
+        } catch (NoSuchMethodException e) {
+            // Method absent — silently return null
+        } catch (Exception e) {
+            LOGGER.warn("[FACompat] getPlanLandingThrust failed: {}", e.getMessage());
+        }
+        return null;
+    }
+
+    /**
      * Returns the index of the active (TARGET) enroute waypoint, or {@code -1}.
      *
      * <p>Verified against FA 3.0.1: {@code EnrouteWaypoint.active: Active?}
      * where {@code Active.TARGET} marks the currently targeted waypoint.</p>
+     *
+     * <p>Reflection artefacts ({@code Active} class, {@code TARGET} constant,
+     * {@code getActive} method) are cached on first successful use to avoid
+     * repeated {@code Class.forName} and enum-scan overhead on every client
+     * tick.</p>
      */
     public static int getActiveWaypointIndex() {
         List<Object> wps = getEnrouteWaypoints();
+        if (wps == null || wps.isEmpty()) return -1;
         try {
-            Class<?> activeClass = Class.forName(CLASS_ENROUTE_ACTIVE);
-            // Find the enum constant "TARGET"
-            Object targetConstant = null;
-            for (Object c : activeClass.getEnumConstants()) {
-                if ("TARGET".equals(((Enum<?>) c).name())) {
-                    targetConstant = c;
-                    break;
+            // Load and cache the Active enum class + TARGET constant on first call.
+            if (!enrouteActiveClassLoadFailed && cachedTargetConstant == null) {
+                Class<?> activeClass = Class.forName(CLASS_ENROUTE_ACTIVE);
+                for (Object c : activeClass.getEnumConstants()) {
+                    if ("TARGET".equals(((Enum<?>) c).name())) {
+                        cachedTargetConstant = c;
+                        cachedEnrouteActiveClass = activeClass;
+                        break;
+                    }
+                }
+                if (cachedTargetConstant == null) {
+                    enrouteActiveClassLoadFailed = true;
+                    return -1;
                 }
             }
-            if (targetConstant == null) return -1;
+            if (enrouteActiveClassLoadFailed) return -1;
+
+            // Pre-populate cachedGetActiveMethod from the first waypoint's class;
+            // all EnrouteWaypoint instances share the same class so one entry suffices.
+            // Verified against FA 3.0.1: getActive() on EnrouteWaypoint
+            if (cachedGetActiveMethod == null) {
+                cachedGetActiveMethod = wps.get(0).getClass().getMethod("getActive");
+            }
 
             for (int i = 0; i < wps.size(); i++) {
                 Object wp = wps.get(i);
-                // Verified against FA 3.0.1: getActive() on EnrouteWaypoint
-                Method getActive = wp.getClass().getMethod("getActive");
-                Object active = getActive.invoke(wp);
-                if (targetConstant.equals(active)) return i;
+                Object active = cachedGetActiveMethod.invoke(wp);
+                if (cachedTargetConstant.equals(active)) return i;
             }
         } catch (Exception e) {
             LOGGER.warn("[FACompat] getActiveWaypointIndex failed: {}", e.getMessage());
@@ -748,6 +919,156 @@ public class FlightAssistantCompat {
         } catch (Exception e) {
             LOGGER.warn("[FACompat] setArrivalWaypoint failed: {}", e.getMessage());
             return false;
+        }
+    }
+
+    // =========================================================================
+    // Per-tick navigation management
+    // =========================================================================
+
+    /**
+     * Monitors the flight-plan navigation state and corrects the autopilot's
+     * lateral mode when FA's internal plan advances past the last enroute
+     * waypoint into the arrival/approach phase.
+     *
+     * <p>Call this once per client tick while FlightAssistant is loaded.</p>
+     *
+     * <h4>Problem addressed</h4>
+     * <p>When the player uses <em>Fly Here</em> (or <em>[FA] Set as COORDS
+     * Target</em>) to navigate toward an enroute waypoint,
+     * {@link #setCoordsTarget} writes a static
+     * {@code DirectCoordinatesLateralMode} into
+     * {@code AutoFlightComputer.selectedLateralMode}.  FA resolves the active
+     * lateral mode as {@code selectedLateralMode ?: plan.getLateralMode()}, so
+     * this override persists even after FA's own plan marks the waypoint as
+     * passed and tries to transition to the arrival approach.  The result is
+     * that the autopilot keeps flying toward — and past — the already-passed
+     * enroute waypoint instead of initiating the approach.</p>
+     *
+     * <h4>Fix — two layers</h4>
+     * <ol>
+     *   <li><b>Clear on plan advance</b> — the last active-waypoint index is
+     *       cached each tick; whenever it changes (FA advanced the plan),
+     *       {@link #clearSelectedLateralMode()} is called so FA's own sequencer
+     *       can take over for the new phase.</li>
+     *   <li><b>One-shot approach fallback</b> — as a safety net, when all
+     *       enroute waypoints are done, arrival data is present, and no lateral
+     *       mode is currently active (FA's plan returned {@code null}), a
+     *       direct-to-arrival COORDS target is set once, together with a
+     *       {@code SelectedAltitudeVerticalMode} targeting the runway elevation
+     *       and a {@code ConstantThrustMode} at the arrival's landing thrust,
+     *       so the plane descends and reduces power on the way to the
+     *       destination.</li>
+     * </ol>
+     */
+    public static void tickNavigation() {
+        if (!isAutopilotEngaged()) {
+            lastTickActiveWaypointIndex = UNINITIALIZED_INDEX;
+            approachFallbackTriggered = false;
+            return;
+        }
+
+        int currentActiveIdx = getActiveWaypointIndex();
+
+        // Layer 1 — detect plan advancement and clear any stale COORDS override.
+        if (lastTickActiveWaypointIndex != UNINITIALIZED_INDEX
+                && currentActiveIdx != lastTickActiveWaypointIndex) {
+            clearSelectedLateralMode();
+            approachFallbackTriggered = false;
+            LOGGER.debug("[FACompat] Plan advanced ({} → {}): cleared lateral-mode override.",
+                    lastTickActiveWaypointIndex, currentActiveIdx);
+        }
+
+        lastTickActiveWaypointIndex = currentActiveIdx;
+
+        // Layer 2 — one-shot approach fallback.
+        // If all enroute waypoints have been passed (no active TARGET) but
+        // arrival data is present, and no lateral mode is currently selected
+        // (FA's plan mode returned null), explicitly fly toward the arrival so
+        // the plane does not just maintain its last heading.
+        // Also set the vertical mode to descend to the runway elevation and the
+        // thrust mode to the arrival's landing thrust so FA doesn't keep full
+        // throttle all the way to the ground.
+        if (!approachFallbackTriggered && currentActiveIdx == -1) {
+            List<Object> enroute = getEnrouteWaypoints();
+            if (enroute != null && !enroute.isEmpty()) {
+                Object arrival = getArrivalData();
+                if (arrival != null && !isPlanDataDefault(arrival)) {
+                    Integer arrX = getPlanCoordinatesX(arrival);
+                    Integer arrZ = getPlanCoordinatesZ(arrival);
+                    if (arrX != null && arrZ != null
+                            && !isSelectedLateralModeActive()
+                            && getPlanLateralMode() == null) {
+                        setCoordsTarget(arrX, arrZ);
+
+                        // Descend to runway elevation if it is set (non-zero sentinel).
+                        Integer elevation = getPlanElevation(arrival);
+                        if (elevation != null && elevation != 0) {
+                            setApproachVerticalMode(elevation);
+                        }
+
+                        // Reduce thrust to the arrival's landing-thrust setting.
+                        Float landingThrust = getPlanLandingThrust(arrival);
+                        if (landingThrust != null) {
+                            setApproachThrustMode(landingThrust);
+                        }
+
+                        approachFallbackTriggered = true;
+                        LOGGER.info("[FACompat] No lateral mode after enroute — "
+                                + "initiated fallback approach to arrival ({}, {}), "
+                                + "elevation={}, landingThrust={}.",
+                                arrX, arrZ, elevation, landingThrust);
+                        sendChatMessage("§eApproach to arrival initiated.");
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Returns {@code true} if {@code AutoFlightComputer.selectedLateralMode}
+     * is currently non-{@code null} (i.e. a manual COORDS override is active).
+     */
+    private static boolean isSelectedLateralModeActive() {
+        Object afc = getAutoFlightComputer();
+        if (afc == null) return false;
+        try {
+            Method getter = findMethodByName(afc.getClass(), "getSelectedLateralMode");
+            if (getter == null) return false;
+            getter.setAccessible(true);
+            return getter.invoke(afc) != null;
+        } catch (Exception e) {
+            LOGGER.debug("[FACompat] isSelectedLateralModeActive failed: {}", e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * Returns the lateral mode that {@code FlightPlanComputer.getLateralMode()}
+     * would supply (i.e. FA's plan-driven lateral mode, excluding any manual
+     * {@code selectedLateralMode} override), or {@code null} if the plan
+     * currently provides no lateral guidance.
+     *
+     * <p>This is used by the layer-2 approach fallback in
+     * {@link #tickNavigation()} to distinguish between "FA's plan has an
+     * approach mode ready" (do not override it) and "FA's plan returned
+     * nothing" (safe to fire the fallback).</p>
+     *
+     * <p>Verified against FA 3.0.1: {@code FlightPlanComputer.getLateralMode():
+     * LateralMode?} — a regular function returning a nullable
+     * {@code LateralMode}.</p>
+     */
+    private static Object getPlanLateralMode() {
+        Object plan = getFlightPlanComputer();
+        if (plan == null) return null;
+        try {
+            Method m = findMethodByName(plan.getClass(), "getLateralMode");
+            if (m == null) return null;
+            m.setAccessible(true);
+            return m.invoke(plan);
+        } catch (Exception e) {
+            LOGGER.debug("[FACompat] getPlanLateralMode failed: {}", e.getMessage());
+            return null;
         }
     }
 

@@ -160,6 +160,9 @@ public class FlightAssistantCompat {
     /** Sentinel: navigation tracker has not been initialised or autopilot was off. */
     private static final int UNINITIALIZED_INDEX = Integer.MIN_VALUE;
 
+    /** Default approach thrust (30 %) used when no landing thrust is configured. */
+    private static final float DEFAULT_APPROACH_THRUST = 0.3f;
+
     /**
      * Active-waypoint index cached from the previous call to
      * {@link #tickNavigation()}.  Used to detect when FA's internal plan
@@ -1008,16 +1011,19 @@ public class FlightAssistantCompat {
                         }
 
                         // Reduce thrust to the arrival's landing-thrust setting.
+                        // Fall back to DEFAULT_APPROACH_THRUST (30 %) when no
+                        // landing thrust is configured so the last enroute speed
+                        // mode does not carry over to the approach phase at full power.
                         Float landingThrust = getPlanLandingThrust(arrival);
-                        if (landingThrust != null) {
-                            setApproachThrustMode(landingThrust);
-                        }
+                        float effectiveLandingThrust =
+                                (landingThrust != null) ? landingThrust : DEFAULT_APPROACH_THRUST;
+                        setApproachThrustMode(effectiveLandingThrust);
 
                         approachFallbackTriggered = true;
                         LOGGER.info("[FACompat] No lateral mode after enroute — "
                                 + "initiated fallback approach to arrival ({}, {}), "
-                                + "elevation={}, landingThrust={}.",
-                                arrX, arrZ, elevation, landingThrust);
+                                + "elevation={}, landingThrust={} (configured={}).",
+                                arrX, arrZ, elevation, effectiveLandingThrust, landingThrust);
                         sendChatMessage("§eApproach to arrival initiated.");
                     }
                 }

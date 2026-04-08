@@ -15,8 +15,12 @@ import org.lwjgl.glfw.GLFW;
 
 /**
  * A small, vanilla-styled GUI screen that prompts the player to enter a target
- * altitude (required) and an optional target speed before adding an enroute
- * waypoint to FlightAssistant's flight plan.
+ * altitude (required) and a target speed before adding an enroute waypoint to
+ * FlightAssistant's flight plan.
+ *
+ * <p>The speed field is pre-populated with the player's current horizontal
+ * speed (blocks/s) so that FlightAssistant always has a non-zero speed target,
+ * preventing the autopilot from defaulting to 0 % thrust on enroute segments.</p>
  *
  * <p>If the player closes the screen or presses Cancel the waypoint is NOT
  * added and no state is changed.</p>
@@ -116,7 +120,7 @@ public class WaypointAltitudeScreen extends Screen {
 
         addRenderableWidget(altitudeField);
 
-        // ---- Speed field (optional) ----
+        // ---- Speed field (pre-populated from current player speed) ----
         int speedY = altY + 28;
         speedField = new EditBox(
                 font,
@@ -124,7 +128,21 @@ public class WaypointAltitudeScreen extends Screen {
                 PANEL_WIDTH - 70, 20,
                 Component.literal("Speed"));
         speedField.setMaxLength(8);
-        speedField.setHint(Component.literal("optional"));
+        speedField.setHint(Component.literal("blocks/s"));
+
+        // Pre-populate with the player's current horizontal speed so that FA
+        // always receives a non-zero speed target (speed=0 suppresses thrust).
+        if (minecraft != null && minecraft.player != null) {
+            net.minecraft.world.phys.Vec3 motion = minecraft.player.getDeltaMovement();
+            double horizontalSpeed =
+                    Math.sqrt(motion.x * motion.x + motion.z * motion.z) * 20.0;
+            // Round to the nearest integer; use at least 10 blocks/s so the
+            // field is never blank or zero even when the player is stationary.
+            int suggestedSpeed = (int) Math.round(horizontalSpeed);
+            if (suggestedSpeed < 10) suggestedSpeed = 10;
+            speedField.setValue(String.valueOf(suggestedSpeed));
+        }
+
         addRenderableWidget(speedField);
 
         // ---- Confirm button ----

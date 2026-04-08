@@ -11,6 +11,7 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.Collections;
 import java.util.List;
+import java.util.Objects;
 import java.util.UUID;
 
 /**
@@ -160,6 +161,16 @@ public class FlightAssistantCompat {
     /** Sentinel: navigation tracker has not been initialised or autopilot was off. */
     private static final int UNINITIALIZED_INDEX = Integer.MIN_VALUE;
 
+    /** Default approach thrust (30 %) used when no landing thrust is configured. */
+    private static final float DEFAULT_APPROACH_THRUST = 0.3f;
+
+    /**
+     * Horizontal distance (blocks) from the arrival coordinates at which the
+     * final-approach phase cuts thrust to idle so the plane glides down rather
+     * than circling at constant power.
+     */
+    private static final double FINAL_APPROACH_RADIUS = 150.0;
+
     /**
      * Active-waypoint index cached from the previous call to
      * {@link #tickNavigation()}.  Used to detect when FA's internal plan
@@ -173,6 +184,14 @@ public class FlightAssistantCompat {
      * {@code setCoordsTarget} calls every tick.
      */
     private static boolean approachFallbackTriggered = false;
+
+    /**
+     * {@code true} once the final-approach thrust cut has been applied for the
+     * current arrival, preventing repeated {@code setApproachThrustMode} calls.
+     * Cleared together with {@code approachFallbackTriggered} when the autopilot
+     * is disengaged.
+     */
+    private static boolean finalApproachTriggered = false;
 
     // -------------------------------------------------------------------------
     // Reflection caches for getActiveWaypointIndex() — populated on first use
@@ -956,15 +975,22 @@ public class FlightAssistantCompat {
      *       mode is currently active (FA's plan returned {@code null}), a
      *       direct-to-arrival COORDS target is set once, together with a
      *       {@code SelectedAltitudeVerticalMode} targeting the runway elevation
-     *       and a {@code ConstantThrustMode} at the arrival's landing thrust,
-     *       so the plane descends and reduces power on the way to the
-     *       destination.</li>
+     *       and a {@code ConstantThrustMode} at the arrival's landing thrust (or
+     *       {@link #DEFAULT_APPROACH_THRUST} if none is configured), so the
+     *       plane descends and reduces power on the way to the destination.</li>
+     *   <li><b>Final-approach thrust cut</b> — once the approach fallback is
+     *       active, the player's horizontal distance to the arrival is monitored
+     *       each tick.  When it falls within {@link #FINAL_APPROACH_RADIUS}
+     *       blocks the thrust mode is cut to idle (0 %) so the plane glides
+     *       down rather than circling the landing waypoint at constant approach
+     *       power.</li>
      * </ol>
      */
     public static void tickNavigation() {
         if (!isAutopilotEngaged()) {
             lastTickActiveWaypointIndex = UNINITIALIZED_INDEX;
             approachFallbackTriggered = false;
+            finalApproachTriggered = false;
             return;
         }
 
@@ -975,6 +1001,7 @@ public class FlightAssistantCompat {
                 && currentActiveIdx != lastTickActiveWaypointIndex) {
             clearSelectedLateralMode();
             approachFallbackTriggered = false;
+            finalApproachTriggered = false;
             LOGGER.debug("[FACompat] Plan advanced ({} → {}): cleared lateral-mode override.",
                     lastTickActiveWaypointIndex, currentActiveIdx);
         }
@@ -1008,17 +1035,47 @@ public class FlightAssistantCompat {
                         }
 
                         // Reduce thrust to the arrival's landing-thrust setting.
+                        // Fall back to DEFAULT_APPROACH_THRUST (30 %) when no
+                        // landing thrust is configured so the last enroute speed
+                        // mode does not carry over to the approach phase at full power.
                         Float landingThrust = getPlanLandingThrust(arrival);
-                        if (landingThrust != null) {
-                            setApproachThrustMode(landingThrust);
-                        }
+                        float effectiveLandingThrust =
+                                Objects.requireNonNullElse(landingThrust, DEFAULT_APPROACH_THRUST);
+                        setApproachThrustMode(effectiveLandingThrust);
 
                         approachFallbackTriggered = true;
                         LOGGER.info("[FACompat] No lateral mode after enroute — "
                                 + "initiated fallback approach to arrival ({}, {}), "
-                                + "elevation={}, landingThrust={}.",
-                                arrX, arrZ, elevation, landingThrust);
+                                + "elevation={}, landingThrust={} (configured={}).",
+                                arrX, arrZ, elevation, effectiveLandingThrust, landingThrust);
                         sendChatMessage("§eApproach to arrival initiated.");
+                    }
+                }
+            }
+        }
+
+        // Layer 3 — final-approach thrust cut.
+        // Once the approach fallback has steered the plane toward the arrival,
+        // monitor the player's horizontal distance to the arrival coordinates.
+        // When the plane comes within FINAL_APPROACH_RADIUS blocks, cut thrust
+        // to idle (0 %) so the Elytra glides down instead of circling the
+        // landing point at constant approach power.
+        if (approachFallbackTriggered && !finalApproachTriggered) {
+            Object arrival = getArrivalData();
+            if (arrival != null && !isPlanDataDefault(arrival)) {
+                Integer arrX = getPlanCoordinatesX(arrival);
+                Integer arrZ = getPlanCoordinatesZ(arrival);
+                Minecraft mc = Minecraft.getInstance();
+                if (arrX != null && arrZ != null && mc.player != null) {
+                    double dx = mc.player.getX() - arrX;
+                    double dz = mc.player.getZ() - arrZ;
+                    double horizontalDist = Math.sqrt(dx * dx + dz * dz);
+                    if (horizontalDist <= FINAL_APPROACH_RADIUS) {
+                        setApproachThrustMode(0.0f);
+                        finalApproachTriggered = true;
+                        LOGGER.info("[FACompat] Within {} blocks of arrival — cut thrust to idle.",
+                                (int) horizontalDist);
+                        sendChatMessage("§eFinal approach — thrust idle.");
                     }
                 }
             }
